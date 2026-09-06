@@ -684,7 +684,19 @@ def presentation_detail(round_num, order_num):
         abort(502, description=f"データ取得に失敗しました: {e}")
     if presentation is None:
         abort(404, description="発表データが見つかりません")
-    return render_template("index.html", presentation=presentation)
+    # 前後の発表を取得 (同一回の前後順)
+    prev_presentation = None
+    next_presentation = None
+    if order_num > 1:
+        prev_presentation = get_presentation_by_round_order(round_num, order_num - 1)
+    # 次の発表は order+1 を試す (存在しない場合は None)
+    next_presentation = get_presentation_by_round_order(round_num, order_num + 1)
+    return render_template(
+        "index.html",
+        presentation=presentation,
+        prev=prev_presentation,
+        next=next_presentation,
+    )
 
 
 @app.route("/list")

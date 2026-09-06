@@ -39,5 +39,13 @@
   <p id="comment">コメントなし</p>
   {% endif %}
 </div>
+<footer>
+{% if prev %}
+  <a href="{{ url_for('presentation_detail', round_num=prev.session_round|int, order_num=prev.presentation_order|int) }}" class="nav-button prev"><div class="button-container btn-prev"><div>← 前の記事:</div><div>{{ prev.title }}</div></div></a>
+{% endif %}
+{% if next %}
+  <a href="{{ url_for('presentation_detail', round_num=next.session_round|int, order_num=next.presentation_order|int) }}" class="nav-button next"><div class="button-container btn-next"><div>→ 次の記事:</div><div>{{ next.title }}</div></div></a>
+{% endif %}
+</footer>
 </body>
 </html>
