@@ -300,7 +300,7 @@ GRADE_CHOICES = ("1", "2", "3", "4")
 
 
 def normalize_grade_input(raw):
-    """登録用: '', '1'〜'4'、旧形式 'Grade N' を受け付け、数字 or '' を返す。受付不可は None。"""
+    """登録用: '', '1'〜'4'、旧形式 'N-year' を受け付け、数字 or '' を返す。受付不可は None。"""
     if raw is None:
         return ""
     text = str(raw).strip()
@@ -318,7 +318,7 @@ def grade_display(grade):
     """表示用: '3' -> 'Grade 3'、'' -> ''。旧形式の混在時も正規化して表示。"""
     g = normalize_grade_input(grade)
     if g:
-        return f"Grade {g}"
+        return f"{g}-year"
     return ""
 
 
