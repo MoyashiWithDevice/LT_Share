@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理画面 | LT Share</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a><a href="{{ url_for('index') }}">Top</a>{% if password_set %}<a href="{{ url_for('admin_logout') }}">Logout</a>{% endif %}</nav></div></header>
+
+<main class="admin-container">
+  <div class="admin-title-row">
+    <h1>DB管理</h1>
+    {% if not password_set %}
+    <p class="flash warning">⚠ ADMIN_PASSWORD 未設定のため保護なしで公開されています。本番では必ず .env に設定してください。</p>
+    {% endif %}
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <p class="flash {{ category }}">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+
+  <div class="stats">
+    <div class="stat">発表 <strong>{{ presentations|length }}</strong> 件</div>
+    <div class="stat">開催回 <strong>{{ sessions|length }}</strong> 件</div>
+  </div>
+
+  <nav class="admin-tabs">
+    <a href="#presentations">発表の追加</a>
+    <a href="#sessions">開催回 ({{ sessions|length }})</a>
+    <a href="{{ url_for('admin_presentations') }}">発表一覧・編集 ({{ presentations|length }}) →</a>
+  </nav>
+
+  <!-- ===== 発表 ===== -->
+  <section id="presentations" class="admin-section">
+    <h2>発表の追加</h2>
+    <form method="post" action="{{ url_for('admin_create_presentation') }}" class="card-form grid">
+      <label>タイトル *<input name="title" required maxlength="200" placeholder="例: Docker入門"></label>
+      <label>発表者<input name="presenter_name" maxlength="100" placeholder="例: I.B."></label>
+      <label>学年
+        <select name="grade">
+          <option value="">(未設定)</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+        </select>
+      </label>
+      <label>開催回 *
+        <select name="session_id" required>
+          <option value="">選択してください</option>
+          {% for s in sessions %}
+          <option value="{{ s.id }}">{{ s.name }} ({{ s.event_date_display }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>発表順 *<input name="presentation_order" type="number" min="1" step="1" required placeholder="例: 3"></label>
+      <label class="full">コメント<textarea name="comment" rows="2" placeholder="発表の概要・補足"></textarea></label>
+      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。</p>
+      <label class="full">タグ (カンマ/スペース区切り)<input name="tags" placeholder="例: Linux, Docker"></label>
+      <div class="full"><button type="submit" class="btn primary">発表を追加</button></div>
+    </form>
+
+  </section>
+
+  <!-- ===== 開催回 ===== -->
+  <section id="sessions" class="admin-section">
+    <h2>開催回</h2>
+    <p class="hint">一番上の行から新規追加、各行で編集・削除できます。</p>
+    <table class="admin-table">
+      <thead><tr><th>ID</th><th>開催回名</th><th>開催日</th><th>発表数</th><th>操作</th></tr></thead>
+      <tbody>
+      <tr class="new-row">
+        <form method="post" action="{{ url_for('admin_create_session') }}">
+          <td>新規</td>
+          <td><input name="name" required placeholder="例: 第3回"></td>
+          <td><input type="date" name="event_date"></td>
+          <td>—</td>
+          <td><button type="submit" class="btn small primary">追加</button></td>
+        </form>
+      </tr>
+      {% for s in sessions %}
+      <tr>
+        <form method="post" action="{{ url_for('admin_update_session', session_id=s.id) }}">
+          <td>{{ s.id }}</td>
+          <td><input name="name" value="{{ s.name }}" required></td>
+          <td><input type="date" name="event_date" value="{{ s.event_date }}"></td>
+          <td>{{ s.presentation_count }}</td>
+          <td class="btn-row">
+            <button type="submit" class="btn small primary">更新</button>
+            <button type="submit" class="btn small danger" formaction="{{ url_for('admin_delete_session', session_id=s.id) }}" onclick="return confirm('開催回「{{ s.name }}」を削除しますか？');">削除</button>
+          </td>
+        </form>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+</main>
+</body>
+</html>

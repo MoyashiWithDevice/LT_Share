@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>発表一覧・編集 | LT Share Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for('admin_dashboard') }}">管理トップ</a><a href="{{ url_for('list_page') }}">List</a>{% if password_set %}<a href="{{ url_for('admin_logout') }}">Logout</a>{% endif %}</nav></div></header>
+
+<main class="admin-container">
+  <h1>発表一覧・編集</h1>
+  <p class="hint">タイトルを選択すると編集ページに移動します。新規追加は<a href="{{ url_for('admin_dashboard') }}#presentations">管理トップのフォーム</a>から行えます。</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <p class="flash {{ category }}">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+
+  <table class="admin-table">
+    <thead><tr><th>発表回</th><th>発表順</th><th>タイトル</th></tr></thead>
+    <tbody>
+    {% for p in presentations %}
+    <tr>
+      <td>{{ p.session.name }}</td>
+      <td>{{ p.presentation_order }}</td>
+      <td><a href="{{ url_for('admin_edit_presentation', presentation_id=p.id) }}">{{ p.title }}</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="3">発表データがありません。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

@@ -12,7 +12,7 @@
   <object id="slide" data="{{ presentation.pdf_url }}"></object>
 </div>
 <div id="title"><h1 id="title-name">{{ presentation.title }}</h1><div id="title-tag">{% for tag in presentation.tags %}<span>#{{ tag }}</span>{% else %}<span class="no-tag">タグ未設定</span>{% endfor %}</div></div>
-<div id="other"><div id="person"><span id="name">{{ presentation.presenter_name }}</span><span>{{ presentation.grade }}</span></div><div id="date"><span>{{ presentation.session.name }}</span><span>{{ presentation.session.event_date_display }}</span></div></div>
+<div id="other"><div id="person"><span id="name">{{ presentation.presenter_name }}</span><span>{{ presentation.grade_display }}</span></div><div id="date"><span>{{ presentation.session.name }}</span><span>{{ presentation.session.event_date_display }}</span></div></div>
 <hr>
 <div id="detail">
   <h3>Comment</h3>

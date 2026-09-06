@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>発表の編集 #{{ presentation.id }} | LT Share Admin</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for('admin_presentations') }}">発表一覧</a><a href="{{ url_for('admin_dashboard') }}">管理トップ</a>{% if password_set %}<a href="{{ url_for('admin_logout') }}">Logout</a>{% endif %}</nav></div></header>
+
+<main class="admin-container">
+  <h1>発表の編集 #{{ presentation.id }}</h1>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <p class="flash {{ category }}">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="post" action="{{ url_for('admin_update_presentation', presentation_id=presentation.id) }}" class="card-form grid">
+    <label>タイトル *<input name="title" value="{{ presentation.title }}" required maxlength="200"></label>
+    <label>発表者<input name="presenter_name" value="{{ presentation.presenter_name }}" maxlength="100"></label>
+    <label>学年
+      <select name="grade">
+        <option value="" {% if not presentation.grade %}selected{% endif %}>(未設定)</option>
+        <option value="1" {% if presentation.grade == "1" %}selected{% endif %}>1</option>
+        <option value="2" {% if presentation.grade == "2" %}selected{% endif %}>2</option>
+        <option value="3" {% if presentation.grade == "3" %}selected{% endif %}>3</option>
+        <option value="4" {% if presentation.grade == "4" %}selected{% endif %}>4</option>
+      </select>
+    </label>
+    <label>開催回 *
+      <select name="session_id" required>
+        {% for s in sessions %}
+        <option value="{{ s.id }}" {% if presentation.session_id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.event_date_display }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="full">発表順 *<input name="presentation_order" type="number" min="1" step="1" required value="{{ presentation.presentation_order }}" placeholder="例: 3"></label>
+    <label class="full">コメント<textarea name="comment" rows="3">{{ presentation.comment }}</textarea></label>
+    <label class="full">タグ (カンマ/スペース区切り)<input name="tags" value="{{ presentation.tags|join(', ') }}" placeholder="例: Linux, Docker"></label>
+    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。</p>
+    <div class="full btn-row">
+      <button type="submit" class="btn primary">更新</button>
+      <a class="btn" href="{{ url_for('index', id=presentation.id) }}" target="_blank" rel="noopener">表示確認</a>
+      <a class="btn" href="{{ url_for('admin_presentations') }}">一覧に戻る</a>
+      <button type="submit" class="btn danger" formaction="{{ url_for('admin_delete_presentation', presentation_id=presentation.id) }}" onclick="return confirm('発表 #{{ presentation.id }}「{{ presentation.title }}」を削除しますか？');">削除</button>
+    </div>
+  </form>
+</main>
+</body>
+</html>

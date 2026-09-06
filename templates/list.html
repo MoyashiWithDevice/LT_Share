@@ -25,7 +25,7 @@
     <h2><a href="{{ url_for('index', id=p.id) }}">{{ p.title }}</a></h2>
     <div class="meta">
       <span>{{ p.presenter_name }}</span>
-      <span>{{ p.grade }}</span>
+      <span>{{ p.grade_display }}</span>
       <span>{{ p.session.name }}</span>
       <span>{{ p.session.event_date_display }}</span>
     </div>

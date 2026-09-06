@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理者ログイン | LT Share</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
+<main class="admin-container narrow">
+  <h1>管理者ログイン</h1>
+  {% if error %}<p class="flash error">{{ error }}</p>{% endif %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    <p class="flash {{ category }}">{{ message }}</p>
+    {% endfor %}
+  {% endwith %}
+  <form method="post" action="{{ url_for('admin_login') }}" class="card-form">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>パスワード
+      <input type="password" name="password" autofocus required autocomplete="current-password">
+    </label>
+    <button type="submit" class="btn primary">ログイン</button>
+  </form>
+  <p class="hint">.env の <code>ADMIN_PASSWORD</code> に設定した値を入力してください。</p>
+</main>
+</body>
+</html>
