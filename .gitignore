@@ -1,5 +1,7 @@
 .env
+.dev.vars
 dev.db
 .venv/
 __pycache__/
 .wrangler/
+node_modules/

@@ -1,0 +1,182 @@
+/* 管理画面用 */
+.admin-badge {
+  font-size: 12px;
+  background: #333;
+  color: #fff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  vertical-align: middle;
+}
+.admin-container {
+  width: 90%;
+  max-width: 960px;
+  margin: 0 auto;
+  text-align: left;
+  padding-bottom: 80px;
+}
+.admin-container.narrow {
+  max-width: 480px;
+}
+.admin-title-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.stats {
+  display: flex;
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+.stat {
+  flex: 1;
+  background: #f6f6f6;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+.admin-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  position: sticky;
+  top: 60px;
+  background: #fff;
+  padding: 8px 0;
+  border-bottom: 1px solid #e5e5e5;
+  z-index: 50;
+}
+.admin-tabs a {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  text-decoration: none;
+  color: #333;
+  font-size: 14px;
+}
+.admin-tabs a:hover {
+  background: #f0f0f0;
+}
+.admin-section {
+  margin-bottom: 48px;
+  scroll-margin-top: 120px;
+}
+.admin-section h2 {
+  border-left: 4px solid #333;
+  padding-left: 10px;
+  margin: 28px 0 12px;
+}
+.card-form {
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card-form.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.card-form.grid .full {
+  grid-column: 1 / -1;
+}
+.card-form.inline {
+  flex-direction: row;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.card-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: bold;
+}
+.card-form input, .card-form select, .card-form textarea {
+  font-weight: normal;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.admin-item {
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.admin-item summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.admin-item summary:hover {
+  background: #f9f9f9;
+}
+.admin-item .card-form {
+  border: none;
+  border-top: 1px solid #eee;
+  border-radius: 0 0 8px 8px;
+  margin-bottom: 0;
+}
+.muted { color: #888; font-size: 13px; }
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.admin-table th, .admin-table td {
+  border: 1px solid #e5e5e5;
+  padding: 8px;
+  text-align: left;
+}
+.admin-table th { background: #f6f6f6; }
+.admin-table input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.admin-table tbody tr.new-row td {
+  background: #fafafa;
+  border-bottom: 2px solid #ddd;
+}
+.btn {
+  display: inline-block;
+  padding: 8px 20px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  text-decoration: none;
+  color: #333;
+  font-size: 14px;
+}
+.btn.primary { background: #333; color: #fff; border-color: #333; }
+.btn.primary:hover { background: #555; }
+.btn.danger { background: #fff; color: #c00; border-color: #c00; }
+.btn.danger:hover { background: #c00; color: #fff; }
+.btn.small { padding: 4px 12px; font-size: 13px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.flash {
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin: 8px 0;
+}
+.flash.success { background: #e6f4ea; border: 1px solid #34a853; color: #137333; }
+.flash.error { background: #fce8e6; border: 1px solid #c5221f; color: #a50e0e; }
+.flash.info { background: #e8f0fe; border: 1px solid #1a73e8; color: #174ea6; }
+.flash.warning { background: #fef7e0; border: 1px solid #f9ab00; color: #7a4a00; }
+.hint { color: #888; font-size: 13px; }

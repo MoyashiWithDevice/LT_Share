@@ -1,0 +1,4 @@
+# ローカル開発用 (wrangler dev)。本番は `wrangler secret put` を使うこと。
+# このファイルをコピーして .dev.vars を作る:  cp .dev.vars.example .dev.vars
+ADMIN_PASSWORD=dev-password
+R2_PUBLIC_BASE_URL=https://pub-9c6fb78fc32546389737119813bc107a.r2.dev
