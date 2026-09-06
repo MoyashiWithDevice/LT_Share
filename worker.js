@@ -41,6 +41,20 @@ function gradeDisplay(grade) {
   return g ? `Grade ${g}` : "";
 }
 
+function normalizeSlideUrl(raw) {
+  if (raw === null || raw === undefined) return "";
+  const text = String(raw).trim();
+  if (text === "") return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  return null;
+}
+
+function materialOf(pdfKey, slideUrl) {
+  if ((slideUrl || "").trim()) return "link";
+  if ((pdfKey || "").trim()) return "pdf";
+  return "none";
+}
+
 function sessionRoundNumber(sess) {
   const m = String(sess?.name ?? "").match(/(\d+)/);
   if (m) return m[1];
@@ -57,6 +71,18 @@ function pdfOrderFromKey(pdfKey) {
   const base = name.toLowerCase().endsWith(".pdf") ? name.slice(0, -4) : name;
   if (/^\d+$/.test(base) && parseInt(base, 10) >= 1) return String(parseInt(base, 10));
   return "";
+}
+
+function presentationOrderOf(row, pdfKey = "") {
+  const raw = row.presentation_order;
+  try {
+    if (raw !== null && raw !== undefined && String(raw).trim() !== "" && parseInt(raw, 10) >= 1) {
+      return String(parseInt(raw, 10));
+    }
+  } catch {
+    // fall through
+  }
+  return pdfOrderFromKey(pdfKey || row.pdf_key || "");
 }
 
 function pdfUrlFor(env, pdfKey) {
@@ -185,9 +211,11 @@ function rowToSession(row) {
 function rowToPresentation(env, row) {
   const eventDate = String(row.s_event_date || "").trim();
   const pdfKey = String(row.pdf_key || "").trim().replace(/^\/+/, "");
+  const slideUrl = String(row.slide_url || "").trim();
   const g = normalizeGradeInput(row.grade);
   const sessionRound = sessionRoundNumber({ name: row.s_name, id: row.s_id });
-  const presentationOrder = pdfOrderFromKey(pdfKey);
+  // 発表順はDBカラムを正とし、0・欠損時は pdf_key から補完 (PDFなしでも順番が消えない)
+  const presentationOrder = presentationOrderOf(row, pdfKey);
   const detailUrl = presentationOrder
     ? `/${sessionRound}/${presentationOrder}`
     : row.id != null
@@ -212,6 +240,10 @@ function rowToPresentation(env, row) {
     event_date_display: eventDate ? eventDate.replace(/-/g, ".") : "",
     comment: row.comment || "",
     pdf_key: pdfKey,
+    slide_url: slideUrl,
+    has_pdf: Boolean(pdfKey),
+    has_link: Boolean(slideUrl),
+    material: materialOf(pdfKey, slideUrl),
     presentation_order: presentationOrder,
     detail_url: detailUrl,
     pdf_url: pdfUrlFor(env, pdfKey),
@@ -272,7 +304,7 @@ function escapeLike(s) {
   return String(s).replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
-async function getAllPresentations(env, sessionId = null, titleQuery = "", genreQuery = "", keywordQuery = "") {
+async function getAllPresentations(env, sessionId = null, titleQuery = "", genreQuery = "", keywordQuery = "", hasSlideOnly = false) {
   const titleKeywords =
     typeof titleQuery === "string" ? splitTitleKeywords(titleQuery) : (titleQuery || []).filter(Boolean);
   const genreKeywords =
@@ -284,6 +316,9 @@ async function getAllPresentations(env, sessionId = null, titleQuery = "", genre
   if (sessionId !== null && sessionId !== undefined) {
     where.push("p.session_id = ?");
     params.push(sessionId);
+  }
+  if (hasSlideOnly) {
+    where.push("(COALESCE(p.pdf_key, '') != '' OR COALESCE(p.slide_url, '') != '')");
   }
   for (const kw of titleKeywords) {
     where.push("p.title LIKE ? ESCAPE '\\'");
@@ -309,9 +344,25 @@ async function getAllPresentations(env, sessionId = null, titleQuery = "", genre
   let sql = PRES_SELECT;
   if (where.length) sql += " WHERE " + where.join(" AND ");
   sql += " ORDER BY s.event_date DESC, p.id DESC";
-  const res = await mustDB(env).prepare(sql).bind(...params).all();
-  const items = (res.results || []).map((r) => rowToPresentation(env, r));
-  return attachTags(env, items);
+  try {
+    const res = await mustDB(env).prepare(sql).bind(...params).all();
+    const items = (res.results || []).map((r) => rowToPresentation(env, r));
+    return attachTags(env, items);
+  } catch (e) {
+    // slide_url未マイグレーションのDB互換: 条件を外してPython側…ではなくJS側で絞る
+    if (hasSlideOnly) {
+      console.warn("has_slide_only条件を外して再試行します:", String(e).slice(0, 200));
+      const where2 = where.filter((w) => !w.includes("slide_url") && !w.includes("COALESCE"));
+      let sql2 = PRES_SELECT;
+      if (where2.length) sql2 += " WHERE " + where2.join(" AND ");
+      sql2 += " ORDER BY s.event_date DESC, p.id DESC";
+      const res2 = await mustDB(env).prepare(sql2).bind(...params).all();
+      const items2 = (res2.results || []).map((r) => rowToPresentation(env, r));
+      const attached = await attachTags(env, items2);
+      return attached.filter((p) => p.has_pdf || p.has_link);
+    }
+    throw e;
+  }
 }
 
 async function getPresentation(env, id) {
@@ -415,6 +466,27 @@ function pageIndex(p) {
     p.tags.length > 0
       ? p.tags.map((t) => `<span>#${esc(t)}</span>`).join("")
       : `<span class="no-tag">タグ未設定</span>`;
+  let slideBlock = "";
+  if (p.has_link) {
+    slideBlock = `<div id="object-wrapper">
+  <div class="slide-link-card">
+    <div class="slide-link-icon">🔗</div>
+    <p class="slide-link-text">この発表の資料は外部リンクで公開されています</p>
+    <a class="slide-link-url" href="${esc(p.slide_url)}" target="_blank" rel="noopener">${esc(p.slide_url)}</a>
+  </div>
+</div>`;
+  } else if (p.has_pdf) {
+    slideBlock = `<div id="object-wrapper">
+  <object id="slide" data="${esc(p.pdf_url)}"></object>
+</div>`;
+  } else {
+    slideBlock = `<div id="object-wrapper">
+  <div class="no-slide">
+    <div class="no-slide-icon">📄</div>
+    <p>資料なし</p>
+  </div>
+</div>`;
+  }
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -425,9 +497,7 @@ function pageIndex(p) {
 </head>
 <body>
 ${headerHtml()}
-<div id="object-wrapper">
-  <object id="slide" data="${esc(p.pdf_url)}"></object>
-</div>
+${slideBlock}
 <div id="title"><h1 id="title-name">${esc(p.title)}</h1><div id="title-tag">${tags}</div></div>
 <div id="other"><div id="person"><span id="name">${esc(p.presenter_name)}</span><span>${esc(p.grade_display)}</span></div><div id="date"><span>${esc(p.session.name)}</span><span>${esc(p.session.event_date_display)}</span></div></div>
 <hr>
@@ -439,7 +509,7 @@ ${headerHtml()}
 </html>`;
 }
 
-function pageList(presentations, sessions, currentSession, searchQuery = "", hasFilter = false) {
+function pageList(presentations, sessions, currentSession, searchQuery = "", hasFilter = false, hasSlideOnly = false) {
   const opts = sessions
     .map(
       (s) =>
@@ -459,10 +529,17 @@ function pageList(presentations, sessions, currentSession, searchQuery = "", has
               : `<span class="no-tag">-</span>`
           }</td>
           <td class="col-session">${esc(p.session.name)}</td>
+          <td class="col-slide">${
+            p.has_link
+              ? `<a class="slide-badge link" href="${esc(p.slide_url)}" target="_blank" rel="noopener">🔗 リンク</a>`
+              : p.has_pdf
+                ? `<a class="slide-badge pdf" href="${esc(p.pdf_url)}" target="_blank" rel="noopener">📄 PDF</a>`
+                : `<span class="slide-badge none">資料なし</span>`
+          }</td>
         </tr>`
           )
           .join("\n")
-      : `<tr class="empty-row"><td colspan="4">条件に一致する発表がありません。</td></tr>`;
+      : `<tr class="empty-row"><td colspan="5">条件に一致する発表がありません。</td></tr>`;
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -490,6 +567,9 @@ ${headerHtml()}
       <button type="submit" class="btn-search">検索</button>
       ${hasFilter ? `<a href="/list" class="filter-clear">クリア</a>` : ``}
     </div>
+    <div class="filter-row">
+      <label class="check-label"><input type="checkbox" name="has_slide" value="1"${hasSlideOnly ? " checked" : ""} onchange="this.form.submit()"> 資料ありのみ</label>
+    </div>
   </form>
   <div class="table-wrapper">
     <table class="list-table">
@@ -499,6 +579,7 @@ ${headerHtml()}
           <th class="col-title">タイトル</th>
           <th class="col-genre">ジャンル</th>
           <th class="col-session">発表回</th>
+          <th class="col-slide">資料</th>
         </tr>
       </thead>
       <tbody>
@@ -608,8 +689,10 @@ ${adminHeaderHtml(passwordSet)}
         </select>
       </label>
       <label>発表順 *<input name="presentation_order" type="number" min="1" step="1" required placeholder="例: 3"></label>
+      <label class="full check-label"><input type="checkbox" name="no_pdf" value="1"> PDFなし (資料なし・または外部リンクのみで公開)</label>
+      <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
       <label class="full">コメント<textarea name="comment" rows="2" placeholder="発表の概要・補足"></textarea></label>
-      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。</p>
+      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。「PDFなし」にするとキーは空で保存され、詳細ページに「資料なし」と表示されます。</p>
       <label class="full">タグ (カンマ/スペース区切り)<input name="tags" placeholder="例: Linux, Docker"></label>
       <div class="full"><button type="submit" class="btn primary">発表を追加</button></div>
     </form>
@@ -647,10 +730,11 @@ function pageAdminPresentations(url, presentations, passwordSet) {
       <td>${esc(p.session.name)}</td>
       <td>${esc(p.presentation_order)}</td>
       <td><a href="/admin/presentations/${p.id}/edit">${esc(p.title)}</a></td>
+      <td>${p.has_link ? `🔗 <a href="${esc(p.slide_url)}" target="_blank" rel="noopener">リンク</a>` : p.has_pdf ? "📄 PDF" : `<span class="no-tag">資料なし</span>`}</td>
     </tr>`
           )
           .join("\n")
-      : `<tr><td colspan="3">発表データがありません。</td></tr>`;
+      : `<tr><td colspan="4">発表データがありません。</td></tr>`;
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -663,8 +747,10 @@ function pageAdminPresentations(url, presentations, passwordSet) {
 <body>
 <header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="/admin/">管理トップ</a><a href="/list">List</a>${passwordSet ? `<a href="/admin/logout">Logout</a>` : ``}</nav></div></header>
 <main class="admin-container">
-  <h1>発表一覧・編集</h1>
-  <p class="hint">タイトルを選択すると編集ページに移動します。新規追加は<a href="/admin/#presentations">管理トップのフォーム</a>から行えます。</p>
+  <div class="list-head-row">
+    <h1>発表一覧・編集</h1>
+    <a class="btn primary small" href="/admin/#presentations">＋ 新規登録</a>
+  </div>
   ${flashHtml(url)}
   <table class="admin-table">
     <thead><tr><th>発表回</th><th>発表順</th><th>タイトル</th></tr></thead>
@@ -718,9 +804,11 @@ function pageAdminEdit(url, p, sessions, passwordSet) {
       </select>
     </label>
     <label class="full">発表順 *<input name="presentation_order" type="number" min="1" step="1" required value="${esc(p.presentation_order)}" placeholder="例: 3"></label>
+    <label class="full check-label"><input type="checkbox" name="no_pdf" value="1"${p.has_pdf ? "" : " checked"}> PDFなし (資料なし・または外部リンクのみで公開)</label>
+    <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" value="${esc(p.slide_url)}" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
     <label class="full">コメント<textarea name="comment" rows="3">${esc(p.comment)}</textarea></label>
     <label class="full">タグ (カンマ/スペース区切り)<input name="tags" value="${esc(p.tags.join(", "))}" placeholder="例: Linux, Docker"></label>
-    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。現在のキー: <code>${esc(p.pdf_key)}</code></p>
+    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。現在の状態: ${p.has_link ? `<strong>外部リンク</strong> (外部リンク優先で表示されます)` : p.has_pdf ? `<strong>PDFあり</strong> (<code>${esc(p.pdf_key)}</code>)` : `<strong>資料なし</strong>`}</p>
     <p class="full hint">PDFの差し替えは <code>POST /api/presentations/${p.id}/pdf</code> (form-data <code>file</code>) で行えます。</p>
     <div class="full btn-row">
       <button type="submit" class="btn primary">更新</button>
@@ -779,18 +867,20 @@ async function handleList(request, env, url) {
       .join(" ");
   }
   try {
+    const hasSlideOnly = url.searchParams.get("has_slide") === "1";
     const presentations = await getAllPresentations(
       env,
       Number.isFinite(sessionId) ? sessionId : null,
       "",
       "",
-      searchQuery
+      searchQuery,
+      hasSlideOnly
     );
     const sessions = await getSessions(env);
     const current =
       Number.isFinite(sessionId) ? sessions.find((s) => s.id === sessionId) || null : null;
-    const hasFilter = Boolean(current || searchQuery);
-    return html(pageList(presentations, sessions, current, searchQuery, hasFilter));
+    const hasFilter = Boolean(current || searchQuery || hasSlideOnly);
+    return html(pageList(presentations, sessions, current, searchQuery, hasFilter, hasSlideOnly));
   } catch (e) {
     console.error(e);
     return html(`<h1>データ取得に失敗しました</h1><p>${esc(String(e))}</p>`, 502);
@@ -800,8 +890,10 @@ async function handleList(request, env, url) {
 async function handleSlideRedirect(request, env, id) {
   try {
     const p = await getPresentation(env, id);
-    if (!p || !p.pdf_key) return new Response("スライドが見つかりません", { status: 404 });
-    return redirect(pdfUrlFor(env, p.pdf_key), 302);
+    if (!p) return new Response("スライドが見つかりません", { status: 404 });
+    if (p.slide_url) return redirect(p.slide_url, 302);
+    if (p.pdf_key) return redirect(pdfUrlFor(env, p.pdf_key), 302);
+    return new Response("資料なし", { status: 404 });
   } catch (e) {
     console.error(e);
     return new Response(`データ取得に失敗しました: ${e}`, { status: 502 });
@@ -944,9 +1036,10 @@ export default {
       const titleQ = (url.searchParams.get("title") || "").trim();
       const genreQ = (url.searchParams.get("genre") || "").trim();
       const keywordQ = (url.searchParams.get("q") || "").trim();
+      const hasSlideOnly = url.searchParams.get("has_slide") === "1";
       try {
         return json(
-          await getAllPresentations(env, Number.isFinite(sid) ? sid : null, titleQ, genreQ, keywordQ)
+          await getAllPresentations(env, Number.isFinite(sid) ? sid : null, titleQ, genreQ, keywordQ, hasSlideOnly)
         );
       } catch (e) {
         return json({ error: String(e) }, 502);
@@ -1018,6 +1111,21 @@ export default {
           .bind(key, pid)
           .run();
         return json({ id: pid, pdf_key: key, pdf_url: pdfUrlFor(env, key) });
+      } catch (e) {
+        console.error(e);
+        return json({ error: String(e) }, 502);
+      }
+    }
+    if ((m = path.match(/^\/api\/presentations\/(\d+)\/pdf$/)) && method === "DELETE") {
+      if (!(await isAdmin(request, env))) return json({ error: "admin login required" }, 401);
+      const pid = parseInt(m[1], 10);
+      try {
+        if (!(await getPresentation(env, pid))) return json({ error: "not found" }, 404);
+        await mustDB(env)
+          .prepare("UPDATE presentations SET pdf_key = '' WHERE id = ?")
+          .bind(pid)
+          .run();
+        return json(await getPresentation(env, pid));
       } catch (e) {
         console.error(e);
         return json({ error: String(e) }, 502);
@@ -1109,24 +1217,28 @@ export default {
       const orderRaw = String(form.get("presentation_order") || "").trim();
       const comment = String(form.get("comment") || "").trim();
       const tagNames = parseTagInput(form.get("tags"));
+      const slideUrl = normalizeSlideUrl(form.get("slide_url"));
+      const noPdf = String(form.get("no_pdf") || "") === "1";
       const fail = (msg) => redirectWithFlash("/admin/#presentations", msg, "error");
       if (!title) return fail("タイトルは必須です");
       if (grade === null) return fail("学年は1〜4の数字で指定してください");
       if (!Number.isFinite(sessionId)) return fail("開催回を選択してください（PDFキー生成に必要です）");
       if (!/^\d+$/.test(orderRaw) || parseInt(orderRaw, 10) < 1)
         return fail("発表順は1以上の数字で指定してください");
+      if (slideUrl === null) return fail("資料URLは http(s):// から始めてください (空欄可)");
       try {
         const sess = await mustDB(env)
           .prepare("SELECT * FROM sessions WHERE id = ?")
           .bind(sessionId)
           .first();
         if (!sess) return fail("指定の開催回が存在しません");
-        const pdfKey = buildPdfKey(sess, parseInt(orderRaw, 10));
+        const pdfKey = noPdf ? "" : buildPdfKey(sess, parseInt(orderRaw, 10));
+        const orderNum = parseInt(orderRaw, 10);
         await mustDB(env)
           .prepare(
-            "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key) VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key, slide_url, presentation_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
           )
-          .bind(title, presenterName, grade, sessionId, comment, pdfKey)
+          .bind(title, presenterName, grade, sessionId, comment, pdfKey, slideUrl, orderNum)
           .run();
         const newest = await mustDB(env)
           .prepare("SELECT id FROM presentations ORDER BY id DESC LIMIT 1")
@@ -1152,27 +1264,31 @@ export default {
       const comment = String(form.get("comment") || "").trim();
       const orderRaw = String(form.get("presentation_order") || "").trim();
       const tagNames = parseTagInput(form.get("tags"));
+      const slideUrl = normalizeSlideUrl(form.get("slide_url"));
+      const noPdf = String(form.get("no_pdf") || "") === "1";
       const fail = (msg) => redirectWithFlash(editUrl, msg, "error");
       if (!title) return fail("タイトルは必須です");
       if (grade === null) return fail("学年は1〜4の数字で指定してください");
       if (!/^\d+$/.test(orderRaw) || parseInt(orderRaw, 10) < 1)
         return fail("発表順は1以上の数字で指定してください");
       if (!Number.isFinite(sessionId)) return fail("開催回を選択してください");
+      if (slideUrl === null) return fail("資料URLは http(s):// から始めてください (空欄可)");
       try {
         const sess = await mustDB(env)
           .prepare("SELECT * FROM sessions WHERE id = ?")
           .bind(sessionId)
           .first();
         if (!sess) return fail("指定の開催回が存在しません");
-        const pdfKey = buildPdfKey(sess, parseInt(orderRaw, 10));
+        const pdfKey = noPdf ? "" : buildPdfKey(sess, parseInt(orderRaw, 10));
+        const orderNum = parseInt(orderRaw, 10);
         await mustDB(env)
           .prepare(
-            "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=? WHERE id=?"
+            "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=?, slide_url=?, presentation_order=? WHERE id=?"
           )
-          .bind(title, presenterName, grade, sessionId, comment, pdfKey, pid)
+          .bind(title, presenterName, grade, sessionId, comment, pdfKey, slideUrl, orderNum, pid)
           .run();
         await setPresentationTags(env, pid, tagNames);
-        return redirectWithFlash(editUrl, `発表 #${pid} を更新しました`, "success");
+        return redirectWithFlash("/admin/presentations", `発表 #${pid} を更新しました`, "success");
       } catch (e) {
         console.error(e);
         return fail(`更新に失敗しました: ${e}`);

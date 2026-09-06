@@ -8,9 +8,26 @@
 </head>
 <body>
 <header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
+{% if presentation.has_link %}
+<div id="object-wrapper">
+  <div class="slide-link-card">
+    <div class="slide-link-icon">🔗</div>
+    <p class="slide-link-text">この発表の資料は外部リンクで公開されています</p>
+    <a class="slide-link-url" href="{{ presentation.slide_url }}" target="_blank" rel="noopener">{{ presentation.slide_url }}</a>
+  </div>
+</div>
+{% elif presentation.has_pdf %}
 <div id="object-wrapper">
   <object id="slide" data="{{ presentation.pdf_url }}"></object>
 </div>
+{% else %}
+<div id="object-wrapper">
+  <div class="no-slide">
+    <div class="no-slide-icon">📄</div>
+    <p>資料なし</p>
+  </div>
+</div>
+{% endif %}
 <div id="title"><h1 id="title-name">{{ presentation.title }}</h1><div id="title-tag">{% for tag in presentation.tags %}<span>#{{ tag }}</span>{% else %}<span class="no-tag">タグ未設定</span>{% endfor %}</div></div>
 <div id="other"><div id="person"><span id="name">{{ presentation.presenter_name }}</span><span>{{ presentation.grade_display }}</span></div><div id="date"><span>{{ presentation.session.name }}</span><span>{{ presentation.session.event_date_display }}</span></div></div>
 <hr>

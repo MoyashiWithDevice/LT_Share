@@ -11,8 +11,10 @@
 <header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for('admin_dashboard') }}">管理トップ</a><a href="{{ url_for('list_page') }}">List</a>{% if password_set %}<a href="{{ url_for('admin_logout') }}">Logout</a>{% endif %}</nav></div></header>
 
 <main class="admin-container">
-  <h1>発表一覧・編集</h1>
-  <p class="hint">タイトルを選択すると編集ページに移動します。新規追加は<a href="{{ url_for('admin_dashboard') }}#presentations">管理トップのフォーム</a>から行えます。</p>
+  <div class="list-head-row">
+    <h1>発表一覧・編集</h1>
+    <a class="btn primary small" href="{{ url_for('admin_dashboard') }}#presentations">＋ 新規登録</a>
+  </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
@@ -21,16 +23,17 @@
   {% endwith %}
 
   <table class="admin-table">
-    <thead><tr><th>発表回</th><th>発表順</th><th>タイトル</th></tr></thead>
+    <thead><tr><th>発表回</th><th>発表順</th><th>タイトル</th><th>資料</th></tr></thead>
     <tbody>
     {% for p in presentations %}
     <tr>
       <td>{{ p.session.name }}</td>
       <td>{{ p.presentation_order }}</td>
       <td><a href="{{ url_for('admin_edit_presentation', presentation_id=p.id) }}">{{ p.title }}</a></td>
+      <td>{% if p.has_link %}🔗 <a href="{{ p.slide_url }}" target="_blank" rel="noopener">リンク</a>{% elif p.has_pdf %}📄 PDF{% else %}<span class="no-tag">資料なし</span>{% endif %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="3">発表データがありません。</td></tr>
+    <tr><td colspan="4">発表データがありません。</td></tr>
     {% endfor %}
     </tbody>
   </table>

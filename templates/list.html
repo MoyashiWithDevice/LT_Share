@@ -27,6 +27,9 @@
       <button type="submit" class="btn-search">検索</button>
       {% if has_filter %}<a href="{{ url_for('list_page') }}" class="filter-clear">クリア</a>{% endif %}
     </div>
+    <div class="filter-row">
+      <label class="check-label"><input type="checkbox" name="has_slide" value="1" {% if has_slide_only %}checked{% endif %} onchange="this.form.submit()"> 資料ありのみ</label>
+    </div>
   </form>
   <div class="table-wrapper">
     <table class="list-table">
@@ -36,6 +39,7 @@
           <th class="col-title">タイトル</th>
           <th class="col-genre">ジャンル</th>
           <th class="col-session">発表回</th>
+          <th class="col-slide">資料</th>
         </tr>
       </thead>
       <tbody>
@@ -51,10 +55,19 @@
             {% endif %}
           </td>
           <td class="col-session">{{ p.session.name }}</td>
+          <td class="col-slide">
+            {% if p.has_link %}
+              <a class="slide-badge link" href="{{ p.slide_url }}" target="_blank" rel="noopener">🔗 リンク</a>
+            {% elif p.has_pdf %}
+              <a class="slide-badge pdf" href="{{ p.pdf_url }}" target="_blank" rel="noopener">📄 PDF</a>
+            {% else %}
+              <span class="slide-badge none">資料なし</span>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
         <tr class="empty-row">
-          <td colspan="4">条件に一致する発表がありません。</td>
+          <td colspan="5">条件に一致する発表がありません。</td>
         </tr>
         {% endfor %}
       </tbody>

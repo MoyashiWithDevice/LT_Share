@@ -202,6 +202,54 @@ def db_execute(sql, params=None):
         con.close()
 
 
+def ensure_local_slide_url_column():
+    """ローカルSQLiteに slide_url / presentation_order カラムがなければ追加 (D1はマイグレーションSQLで対応)。"""
+    if D1_ENABLED:
+        return
+    if not os.path.exists(LOCAL_DB_PATH):
+        return
+    try:
+        con = sqlite3.connect(LOCAL_DB_PATH)
+        try:
+            cols = [r[1] for r in con.execute("PRAGMA table_info(presentations)").fetchall()]
+            if "slide_url" not in cols:
+                con.execute("ALTER TABLE presentations ADD COLUMN slide_url TEXT NOT NULL DEFAULT ''")
+                con.commit()
+                log.info("ローカルDBに slide_url カラムを追加しました")
+                cols.append("slide_url")
+            if "presentation_order" not in cols:
+                con.execute("ALTER TABLE presentations ADD COLUMN presentation_order INTEGER NOT NULL DEFAULT 0")
+                con.commit()
+                log.info("ローカルDBに presentation_order カラムを追加しました")
+                cols.append("presentation_order")
+            if "revision" not in cols:
+                con.execute("ALTER TABLE presentations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+                con.commit()
+                log.info("ローカルDBに revision カラムを追加しました")
+            # 旧行の発表順を pdf_key からバックフィル
+            backfilled = 0
+            for pid, pdf_key in con.execute(
+                "SELECT id, pdf_key FROM presentations WHERE presentation_order = 0"
+            ).fetchall():
+                order = pdf_order_from_key(pdf_key or "")
+                if order:
+                    con.execute(
+                        "UPDATE presentations SET presentation_order = ? WHERE id = ?",
+                        [int(order), pid],
+                    )
+                    backfilled += 1
+            if backfilled:
+                con.commit()
+                log.info("ローカルDBの発表順を %d 件バックフィルしました", backfilled)
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001
+        log.exception("ローカルDBカラム自動追加に失敗")
+
+
+ensure_local_slide_url_column()
+
+
 # ---------- Sessions ----------
 
 
@@ -274,6 +322,27 @@ def grade_display(grade):
     return ""
 
 
+def normalize_slide_url(raw):
+    """外部共有リンク用: 空文字OK。http(s)://始まりのみ受け付け、それ以外は None(エラー)。"""
+    if raw is None:
+        return ""
+    text = str(raw).strip()
+    if text == "":
+        return ""
+    if re.match(r"^https?://", text, re.IGNORECASE):
+        return text
+    return None
+
+
+def material_of(pdf_key, slide_url):
+    """資料種別を返す: 'link' / 'pdf' / 'none'。外部リンクがあれば優先。"""
+    if (slide_url or "").strip():
+        return "link"
+    if (pdf_key or "").strip():
+        return "pdf"
+    return "none"
+
+
 # PDFキー (R2オブジェクトキー) は Slides/{開催回}/{発表順}.pdf の形式で自動生成。
 # "Slides" プレフィックスは固定で、登録画面では入力させない。
 PDF_KEY_PREFIX = "Slides"
@@ -304,10 +373,31 @@ def pdf_order_from_key(pdf_key):
     return ""
 
 
+def _bump_revision(presentation_id):
+    """revision を+1する。未マイグレーションDBでは何もしない (互換用)。"""
+    try:
+        db_execute("UPDATE presentations SET revision = revision + 1 WHERE id = ?", [presentation_id])
+    except Exception as e:  # noqa: BLE001
+        if "revision" not in str(e).lower():
+            raise
+
+
+def presentation_order_of(row, pdf_key=""):
+    """発表順を返す。DBカラム presentation_order を正とし、0・欠損時は pdf_key から補完。"""
+    raw = row.get("presentation_order")
+    try:
+        if raw is not None and str(raw).strip() != "" and int(raw) >= 1:
+            return str(int(raw))
+    except (TypeError, ValueError):
+        pass
+    return pdf_order_from_key(pdf_key or row.get("pdf_key") or "")
+
+
 def row_to_presentation(row):
     """DB行 -> テンプレート用dict。回数・日付は sessions JOIN 結果から取得。"""
     event_date = ((row.get("s_event_date") or "").strip())
     pdf_key = (row.get("pdf_key") or "").strip().lstrip("/")
+    slide_url = (row.get("slide_url") or "").strip()
     try:
         pdf_url = pdf_url_for(pdf_key)
     except Exception:
@@ -315,7 +405,8 @@ def row_to_presentation(row):
     _grade = normalize_grade_input(row.get("grade"))
     grade = _grade if _grade is not None else ""
     session_round = session_round_number({"name": row.get("s_name"), "id": row.get("s_id")})
-    presentation_order = pdf_order_from_key(pdf_key)
+    # 発表順はDBカラムを正とする。未マイグレーションDB・旧行(0)は pdf_key から逆算で補完
+    presentation_order = presentation_order_of(row, pdf_key)
     detail_url = (
         f"/{session_round}/{presentation_order}"
         if presentation_order
@@ -340,7 +431,12 @@ def row_to_presentation(row):
         "event_date_display": event_date.replace("-", ".") if event_date else "",
         "comment": row.get("comment") or "",
         "pdf_key": pdf_key,
+        "slide_url": slide_url,
+        "has_pdf": bool(pdf_key),
+        "has_link": bool(slide_url),
+        "material": material_of(pdf_key, slide_url),
         "presentation_order": presentation_order,
+        "revision": row.get("revision") if row.get("revision") is not None else 0,
         "detail_url": detail_url,
         "pdf_url": pdf_url,
         "pdf_file": pdf_key,
@@ -433,7 +529,12 @@ def parse_tag_input(raw):
 
 
 def set_presentation_tags(presentation_id, tag_names):
-    """発表のタグ紐づけを置き換える。存在しないタグ名は自動作成。"""
+    """発表のタグ紐づけを置き換える。存在しないタグ名は自動作成。
+
+    消失対策: 旧実装の DELETE-first (全削除→再登録) では、途中で失敗すると
+    タグが全滅した。追加分を先に登録し、外れた分だけ後で消すことで、
+    失敗時は「残る」側に倒れるようにしている。
+    """
     names = [n.strip() for n in (tag_names or []) if (n or "").strip()]
     # 重複除去 (順序保持)
     seen, uniq = set(), []
@@ -441,15 +542,29 @@ def set_presentation_tags(presentation_id, tag_names):
         if n not in seen:
             seen.add(n)
             uniq.append(n)
-    db_execute("DELETE FROM presentation_tags WHERE presentation_id = ?", [presentation_id])
+    wanted_ids = set()
     for name in uniq:
         db_execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", [name])
         rows = db_query("SELECT id FROM tags WHERE name = ?", [name])
         if rows:
-            db_execute(
-                "INSERT OR IGNORE INTO presentation_tags (presentation_id, tag_id) VALUES (?, ?)",
-                [presentation_id, rows[0]["id"]],
-            )
+            wanted_ids.add(rows[0]["id"])
+    current_ids = {
+        r["tag_id"]
+        for r in db_query(
+            "SELECT tag_id FROM presentation_tags WHERE presentation_id = ?",
+            [presentation_id],
+        )
+    }
+    for tid in wanted_ids - current_ids:
+        db_execute(
+            "INSERT OR IGNORE INTO presentation_tags (presentation_id, tag_id) VALUES (?, ?)",
+            [presentation_id, tid],
+        )
+    for tid in current_ids - wanted_ids:
+        db_execute(
+            "DELETE FROM presentation_tags WHERE presentation_id = ? AND tag_id = ?",
+            [presentation_id, tid],
+        )
 
 
 def split_title_keywords(raw):
@@ -465,7 +580,7 @@ def escape_like(s):
     return str(s).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def get_all_presentations(session_id=None, title_query=None, genre_query=None, keyword_query=None):
+def get_all_presentations(session_id=None, title_query=None, genre_query=None, keyword_query=None, has_slide_only=False):
     """開催回・タイトル・ジャンル(タグ)で絞り込み取得。
 
     - title_query: 文字列またはキーワードリスト。タイトルに全キーワードを含む(AND・部分一致)
@@ -488,6 +603,10 @@ def get_all_presentations(session_id=None, title_query=None, genre_query=None, k
     if session_id is not None:
         where.append("p.session_id = ?")
         params.append(session_id)
+    if has_slide_only:
+        # PDFまたは外部リンクのどちらかがあるもののみ (資料なしを除外)
+        # slide_urlカラム未マイグレーションのDBでも動くよう、存在確認は呼び出し側で行う
+        where.append("(COALESCE(p.pdf_key, '') != '' OR COALESCE(p.slide_url, '') != '')")
     for kw in title_keywords:
         where.append("p.title LIKE ? ESCAPE '\\'")
         params.append(f"%{escape_like(kw)}%")
@@ -510,7 +629,24 @@ def get_all_presentations(session_id=None, title_query=None, genre_query=None, k
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY s.event_date DESC, p.id DESC"
-    rows = db_query(sql, params)
+    try:
+        rows = db_query(sql, params)
+    except Exception as e:  # noqa: BLE001
+        # slide_url未マイグレーションのDB互換 (D1の400時も含む): 条件を外してPython側で絞る
+        if has_slide_only:
+            log.warning("has_slide_only条件を外して再試行します (slide_url未移行の可能性): %s", e)
+            where2 = [w for w in where if "slide_url" not in w and "COALESCE" not in w]
+            # has_slide_only由来の条件だけ外す: 最後のCOALESCE条件を除去
+            # (COALESCE条件が1件だけのはずなので、pdf_keyのみ条件に緩和できない場合は全件→Python絞り)
+            sql2 = _PRES_SELECT
+            if where2:
+                sql2 += " WHERE " + " AND ".join(where2)
+            sql2 += " ORDER BY s.event_date DESC, p.id DESC"
+            # paramsは slide_url条件に紐づくparamがないためそのまま使える
+            rows = db_query(sql2, params)
+            items = _attach_tags([row_to_presentation(r) for r in rows])
+            return [p for p in items if p.get("has_pdf") or p.get("has_link")]
+        raise
     return _attach_tags([row_to_presentation(r) for r in rows])
 
 
@@ -531,9 +667,9 @@ def index():
         abort(502, description=f"データ取得に失敗しました: {e}")
     if presentation is None:
         abort(404, description="発表データが見つかりません")
-    # 旧URLから正規URL (/{発表回}/{発表順}) へ誘導
+    # 旧URLから正規URL (/{発表回}/{発表順}) へ誘導。PDFなし等で正規URLがない場合はそのまま表示
     detail_url = presentation.get("detail_url") or ""
-    if detail_url.startswith("/"):
+    if detail_url.startswith("/") and not detail_url.startswith("/?"):
         return redirect(detail_url, code=302)
     return render_template("index.html", presentation=presentation)
 
@@ -553,9 +689,10 @@ def presentation_detail(round_num, order_num):
 
 @app.route("/list")
 def list_page():
-    """?session_id= で開催回、?q= でタイトル・ジャンル(タグ)絞り込み可。"""
+    """?session_id= で開催回、?q= でタイトル・ジャンル(タグ)、?has_slide=1 で資料ありのみ絞り込み可。"""
     session_id = request.args.get("session_id", type=int)
     search_query = (request.args.get("q") or "").strip()
+    has_slide_only = request.args.get("has_slide") == "1"
     # 旧パラメータ (?title= / ?genre=) との後方互換: q が空なら旧値を引き継ぐ
     if not search_query:
         legacy = " ".join(
@@ -567,7 +704,7 @@ def list_page():
         search_query = legacy
     try:
         presentations = get_all_presentations(
-            session_id=session_id, keyword_query=search_query
+            session_id=session_id, keyword_query=search_query, has_slide_only=has_slide_only
         )
         sessions = get_sessions()
     except Exception as e:  # noqa: BLE001
@@ -576,7 +713,7 @@ def list_page():
     current_session = None
     if session_id is not None:
         current_session = next((s for s in sessions if s["id"] == session_id), None)
-    has_filter = bool(current_session or search_query)
+    has_filter = bool(current_session or search_query or has_slide_only)
     return render_template(
         "list.html",
         presentations=presentations,
@@ -584,20 +721,25 @@ def list_page():
         current_session=current_session,
         search_query=search_query,
         has_filter=has_filter,
+        has_slide_only=has_slide_only,
     )
 
 
 @app.route("/slides/<int:presentation_id>")
 def slide_redirect(presentation_id):
-    """R2のPDFへリダイレクト (共有リンク用)。"""
+    """資料へのリダイレクト (共有リンク用)。外部リンク優先、なければPDF、どちらもなければ404。"""
     try:
         p = get_presentation(presentation_id)
     except Exception as e:  # noqa: BLE001
         log.exception("D1取得エラー")
         abort(502, description=f"データ取得に失敗しました: {e}")
-    if p is None or not p.get("pdf_url"):
+    if p is None:
         abort(404, description="スライドが見つかりません")
-    return redirect(p["pdf_url"], code=302)
+    if p.get("slide_url"):
+        return redirect(p["slide_url"], code=302)
+    if p.get("pdf_url"):
+        return redirect(p["pdf_url"], code=302)
+    abort(404, description="資料なし")
 
 
 @app.route("/api/sessions")
@@ -653,6 +795,7 @@ def api_presentations():
     title_q = (request.args.get("title") or "").strip()
     genre_q = (request.args.get("genre") or "").strip()
     keyword_q = (request.args.get("q") or "").strip()
+    has_slide_only = request.args.get("has_slide") == "1"
     try:
         return jsonify(
             get_all_presentations(
@@ -660,6 +803,7 @@ def api_presentations():
                 title_query=title_q,
                 genre_query=genre_q,
                 keyword_query=keyword_q,
+                has_slide_only=has_slide_only,
             )
         )
     except Exception as e:  # noqa: BLE001
@@ -734,6 +878,20 @@ def api_upload_pdf(presentation_id):
         log.exception("R2アップロードエラー")
         return jsonify({"error": str(e)}), 502
     return jsonify({"id": presentation_id, "pdf_key": key, "pdf_url": pdf_url_for(key)})
+
+
+@app.route("/api/presentations/<int:presentation_id>/pdf", methods=["DELETE"])
+@admin_api_required
+def api_delete_pdf(presentation_id):
+    """PDF紐づけを外す (pdf_key を空に = 資料なし)。R2オブジェクト自体は残る。"""
+    try:
+        if get_presentation(presentation_id) is None:
+            return jsonify({"error": "not found"}), 404
+        db_execute("UPDATE presentations SET pdf_key = '' WHERE id = ?", [presentation_id])
+    except Exception as e:  # noqa: BLE001
+        log.exception("PDF解除エラー")
+        return jsonify({"error": str(e)}), 502
+    return jsonify(get_presentation(presentation_id))
 
 
 # ---------- Admin (管理画面) ----------
@@ -841,6 +999,8 @@ def admin_create_presentation():
     order_raw = (request.form.get("presentation_order") or "").strip()
     comment = (request.form.get("comment") or "").strip()
     tag_names = parse_tag_input(request.form.get("tags", ""))
+    slide_url = normalize_slide_url(request.form.get("slide_url", ""))
+    no_pdf = request.form.get("no_pdf") == "1"
     if not title:
         flash("タイトルは必須です", "error")
         return redirect(url_for("admin_dashboard") + "#presentations")
@@ -853,18 +1013,45 @@ def admin_create_presentation():
     if not order_raw.isdigit() or int(order_raw) < 1:
         flash("発表順は1以上の数字で指定してください", "error")
         return redirect(url_for("admin_dashboard") + "#presentations")
+    if slide_url is None:
+        flash("資料URLは http(s):// から始めてください (空欄可)", "error")
+        return redirect(url_for("admin_dashboard") + "#presentations")
     try:
         sess_rows = db_query("SELECT * FROM sessions WHERE id = ?", [session_id])
         if not sess_rows:
             flash("指定の開催回が存在しません", "error")
             return redirect(url_for("admin_dashboard") + "#presentations")
         # PDFキーは開催回＋発表順から自動生成 (例: 第1回＋3 → Slides/1/3.pdf)
-        pdf_key = build_pdf_key(sess_rows[0], int(order_raw))
-        db_execute(
-            "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            [title, presenter_name, grade, session_id, comment, pdf_key],
-        )
+        # 「PDFなし」にチェックがあれば空文字で保存。発表順は専用カラムに保持するので消えない
+        pdf_key = "" if no_pdf else build_pdf_key(sess_rows[0], int(order_raw))
+        order_num = int(order_raw)
+        try:
+            db_execute(
+                "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key, slide_url, presentation_order)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [title, presenter_name, grade, session_id, comment, pdf_key, slide_url, order_num],
+            )
+        except Exception as e_inner:  # noqa: BLE001
+            # 未マイグレーションのDB互換: 新カラムなしで再試行
+            msg = str(e_inner).lower()
+            if "slide_url" in msg or "presentation_order" in msg:
+                try:
+                    db_execute(
+                        "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key, slide_url)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        [title, presenter_name, grade, session_id, comment, pdf_key, slide_url],
+                    )
+                except Exception as e_inner2:  # noqa: BLE001
+                    if "slide_url" in str(e_inner2).lower():
+                        db_execute(
+                            "INSERT INTO presentations (title, presenter_name, grade, session_id, comment, pdf_key)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            [title, presenter_name, grade, session_id, comment, pdf_key],
+                        )
+                    else:
+                        raise
+            else:
+                raise
         new_id = db_query("SELECT id FROM presentations ORDER BY id DESC LIMIT 1")[0]["id"]
         set_presentation_tags(new_id, tag_names)
         flash(f"発表「{title}」を追加しました", "success")
@@ -894,6 +1081,8 @@ def admin_update_presentation(presentation_id):
     comment = (request.form.get("comment") or "").strip()
     order_raw = (request.form.get("presentation_order") or "").strip()
     tag_names = parse_tag_input(request.form.get("tags", ""))
+    slide_url = normalize_slide_url(request.form.get("slide_url", ""))
+    no_pdf = request.form.get("no_pdf") == "1"
     if not title:
         flash("タイトルは必須です", "error")
         return redirect(edit_url)
@@ -906,20 +1095,47 @@ def admin_update_presentation(presentation_id):
     if session_id is None:
         flash("開催回を選択してください", "error")
         return redirect(edit_url)
+    if slide_url is None:
+        flash("資料URLは http(s):// から始めてください (空欄可)", "error")
+        return redirect(edit_url)
     try:
         sess_rows = db_query("SELECT * FROM sessions WHERE id = ?", [session_id])
         if not sess_rows:
             flash("指定の開催回が存在しません", "error")
             return redirect(edit_url)
-        # PDFキーは開催回＋発表順から自動生成（開催回・発表順に未設定は許可しない）
-        pdf_key = build_pdf_key(sess_rows[0], int(order_raw))
-        db_execute(
-            "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=?"
-            " WHERE id=?",
-            [title, presenter_name, grade, session_id, comment, pdf_key, presentation_id],
-        )
+        # PDFキーは開催回＋発表順から自動生成。「PDFなし」チェック時は空文字保存
+        # 発表順は専用カラムに保持するので、PDFなしでも順番は消えない
+        pdf_key = "" if no_pdf else build_pdf_key(sess_rows[0], int(order_raw))
+        order_num = int(order_raw)
+        try:
+            db_execute(
+                "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=?, slide_url=?, presentation_order=?"
+                " WHERE id=?",
+                [title, presenter_name, grade, session_id, comment, pdf_key, slide_url, order_num, presentation_id],
+            )
+        except Exception as e_inner:  # noqa: BLE001
+            msg = str(e_inner).lower()
+            if "slide_url" in msg or "presentation_order" in msg:
+                try:
+                    db_execute(
+                        "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=?, slide_url=?"
+                        " WHERE id=?",
+                        [title, presenter_name, grade, session_id, comment, pdf_key, slide_url, presentation_id],
+                    )
+                except Exception as e_inner2:  # noqa: BLE001
+                    if "slide_url" in str(e_inner2).lower():
+                        db_execute(
+                            "UPDATE presentations SET title=?, presenter_name=?, grade=?, session_id=?, comment=?, pdf_key=?"
+                            " WHERE id=?",
+                            [title, presenter_name, grade, session_id, comment, pdf_key, presentation_id],
+                        )
+                    else:
+                        raise
+            else:
+                raise
         set_presentation_tags(presentation_id, tag_names)
         flash(f"発表 #{presentation_id} を更新しました", "success")
+        return redirect(url_for("admin_presentations"))
     except Exception as e:  # noqa: BLE001
         log.exception("Admin更新エラー")
         flash(f"更新に失敗しました: {e}", "error")

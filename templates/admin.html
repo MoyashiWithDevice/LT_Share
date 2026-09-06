@@ -59,8 +59,10 @@
         </select>
       </label>
       <label>発表順 *<input name="presentation_order" type="number" min="1" step="1" required placeholder="例: 3"></label>
+      <label class="full check-label"><input type="checkbox" name="no_pdf" value="1"> PDFなし (資料なし・または外部リンクのみで公開)</label>
+      <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
       <label class="full">コメント<textarea name="comment" rows="2" placeholder="発表の概要・補足"></textarea></label>
-      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。</p>
+      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。「PDFなし」にするとキーは空で保存され、詳細ページに「資料なし」と表示されます。</p>
       <label class="full">タグ (カンマ/スペース区切り)<input name="tags" placeholder="例: Linux, Docker"></label>
       <div class="full"><button type="submit" class="btn primary">発表を追加</button></div>
     </form>

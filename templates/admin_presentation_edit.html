@@ -39,9 +39,11 @@
       </select>
     </label>
     <label class="full">発表順 *<input name="presentation_order" type="number" min="1" step="1" required value="{{ presentation.presentation_order }}" placeholder="例: 3"></label>
+    <label class="full check-label"><input type="checkbox" name="no_pdf" value="1" {% if not presentation.has_pdf %}checked{% endif %}> PDFなし (資料なし・または外部リンクのみで公開)</label>
+    <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" value="{{ presentation.slide_url }}" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
     <label class="full">コメント<textarea name="comment" rows="3">{{ presentation.comment }}</textarea></label>
     <label class="full">タグ (カンマ/スペース区切り)<input name="tags" value="{{ presentation.tags|join(', ') }}" placeholder="例: Linux, Docker"></label>
-    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。</p>
+    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。現在の状態: {% if presentation.has_link %}<strong>外部リンク</strong> (外部リンク優先で表示されます){% elif presentation.has_pdf %}<strong>PDFあり</strong> (<code>{{ presentation.pdf_key }}</code>){% else %}<strong>資料なし</strong>{% endif %}</p>
     <div class="full btn-row">
       <button type="submit" class="btn primary">更新</button>
       <a class="btn" href="{{ presentation.detail_url }}" target="_blank" rel="noopener">表示確認</a>

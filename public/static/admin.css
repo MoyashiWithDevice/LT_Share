@@ -23,6 +23,16 @@
   gap: 8px;
   margin-bottom: 12px;
 }
+.list-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.list-head-row h1 {
+  margin: 0;
+}
 .stats {
   display: flex;
   gap: 12px;
