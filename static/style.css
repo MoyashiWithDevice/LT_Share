@@ -6,6 +6,8 @@ body{
   margin: 0 auto;
   text-align: center;
   padding-top: 76px;
+
+  margin-bottom: 30px;
 }
 #site-header{
   position: fixed;
@@ -130,6 +132,9 @@ h3{
   border: 1px solid #ccc;
   border-radius: 6px;
   background: #fff;
+}
+.check-label{
+  margin-left: 20px;
 }
 .search-row input[type="search"]{
   padding: 6px 10px;

@@ -10,7 +10,13 @@
 <header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
 <main class="list-container">
   <h1>発表一覧</h1>
-  <form method="get" action="{{ url_for('list_page') }}" id="session-filter" class="list-filter">
+  <form method="get" action="{{ url_for('list_page') }}" id="session-filter" class="list-filter"> 
+    <div class="filter-row search-row">
+      <label for="q">タイトル・ジャンル:</label>
+      <input type="search" name="q" id="q" value="{{ search_query|default('') }}" placeholder="タイトル・ジャンルで検索">
+      <button type="submit" class="btn-search">検索</button>
+      {% if has_filter %}<a href="{{ url_for('list_page') }}" class="filter-clear">クリア</a>{% endif %}
+    </div>
     <div class="filter-row">
       <label for="session_id">開催回:</label>
       <select name="session_id" id="session_id" onchange="this.form.submit()">
@@ -19,16 +25,8 @@
         <option value="{{ s.id }}" {% if current_session and current_session.id == s.id %}selected{% endif %}>{{ s.name }}</option>
         {% endfor %}
       </select>
-      <span class="list-count">{{ presentations|length }}件</span>
-    </div>
-    <div class="filter-row search-row">
-      <label for="q">タイトル・ジャンル:</label>
-      <input type="search" name="q" id="q" value="{{ search_query|default('') }}" placeholder="タイトル・ジャンルで検索">
-      <button type="submit" class="btn-search">検索</button>
-      {% if has_filter %}<a href="{{ url_for('list_page') }}" class="filter-clear">クリア</a>{% endif %}
-    </div>
-    <div class="filter-row">
       <label class="check-label"><input type="checkbox" name="has_slide" value="1" {% if has_slide_only %}checked{% endif %} onchange="this.form.submit()"> 資料ありのみ</label>
+      <span class="list-count">{{ presentations|length }}件</span>
     </div>
   </form>
   <div class="table-wrapper">
