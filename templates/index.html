@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LT Share</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="#">List</a></nav></div></header>
+<div id="object-wrapper">
+  <object id="slide" data="{{ url_for('data_file', filename='3.pdf') }}"></object>
+</div>
+<div id="title"><h1 id="title-name">Title</h1><div id="title-tag"><span>#Linux</span><span>#Github</span><span>#PR</span></div></div>
+<div id="other"><div id="person"><span id="name">I.B.</span><span>Grade 3</span></div><div id="date"><span>第1回</span><span>2026.09.04</span></div></div>
+<hr>
+<div id="detail">
+  <h3>Comment</h3>
+  <p id="comment">hoge</p>
+</div>
+</body>
+</html>
