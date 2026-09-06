@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LT Share</title>
+  <title>{{ presentation.title }} | LT Share</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="#">List</a></nav></div></header>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
 <div id="object-wrapper">
-  <object id="slide" data="{{ url_for('data_file', filename='3.pdf') }}"></object>
+  <object id="slide" data="{{ presentation.pdf_url }}"></object>
 </div>
-<div id="title"><h1 id="title-name">Title</h1><div id="title-tag"><span>#Linux</span><span>#Github</span><span>#PR</span></div></div>
-<div id="other"><div id="person"><span id="name">I.B.</span><span>Grade 3</span></div><div id="date"><span>第1回</span><span>2026.09.04</span></div></div>
+<div id="title"><h1 id="title-name">{{ presentation.title }}</h1><div id="title-tag">{% for tag in presentation.tags %}<span>#{{ tag }}</span>{% else %}<span class="no-tag">タグ未設定</span>{% endfor %}</div></div>
+<div id="other"><div id="person"><span id="name">{{ presentation.presenter_name }}</span><span>{{ presentation.grade }}</span></div><div id="date"><span>{{ presentation.session.name }}</span><span>{{ presentation.session.event_date_display }}</span></div></div>
 <hr>
 <div id="detail">
   <h3>Comment</h3>
-  <p id="comment">hoge</p>
+  <p id="comment">{{ presentation.comment }}</p>
 </div>
 </body>
 </html>

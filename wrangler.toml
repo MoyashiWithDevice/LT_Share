@@ -1,0 +1,21 @@
+name = "lt-site"
+compatibility_date = "2026-09-06"
+
+# Cloudflare D1 設定
+# 1. npx wrangler d1 create lt-share-db でDB作成
+# 2. 出力された database_id を下に貼り付け
+# 3. npx wrangler d1 execute lt-share-db --file=./schema.sql
+#    npx wrangler d1 execute lt-share-db --file=./seed.sql
+
+[[d1_databases]]
+binding = "lt_db"
+database_name = "lt-db"
+database_id = "9d59a932-4235-44be-acc8-6b23c947a5a6"
+
+# Cloudflare R2 設定
+# 1. npx wrangler r2 bucket create lt-share-slides でバケット作成
+# 2. 公開する場合: npx wrangler r2 bucket update lt-share-slides --enable-public-access
+#    またはカスタムドメインを接続し、R2_PUBLIC_BASE_URL に設定
+[[r2_buckets]]
+binding = "SLIDES"
+bucket_name = "lt-share-slides"

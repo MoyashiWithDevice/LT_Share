@@ -1,0 +1,5 @@
+.env
+dev.db
+.venv/
+__pycache__/
+.wrangler/

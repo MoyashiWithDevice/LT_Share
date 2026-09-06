@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>List | LT Share</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
+<h1>発表一覧</h1>
+<form method="get" action="{{ url_for('list_page') }}" id="session-filter">
+  <label for="session_id">開催回:</label>
+  <select name="session_id" id="session_id" onchange="this.form.submit()">
+    <option value="">すべて</option>
+    {% for s in sessions %}
+    <option value="{{ s.id }}" {% if current_session and current_session.id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.event_date_display }})</option>
+    {% endfor %}
+  </select>
+  {% if current_session %}<a href="{{ url_for('list_page') }}">クリア</a>{% endif %}
+</form>
+<div id="list">
+  {% for p in presentations %}
+  <article class="card">
+    <h2><a href="{{ url_for('index', id=p.id) }}">{{ p.title }}</a></h2>
+    <div class="meta">
+      <span>{{ p.presenter_name }}</span>
+      <span>{{ p.grade }}</span>
+      <span>{{ p.session.name }}</span>
+      <span>{{ p.session.event_date_display }}</span>
+    </div>
+    <div class="tags">{% for tag in p.tags %}<span>#{{ tag }}</span> {% endfor %}</div>
+  </article>
+  {% else %}
+  <p>発表データがありません。</p>
+  {% endfor %}
+</div>
+</body>
+</html>
