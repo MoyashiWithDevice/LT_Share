@@ -33,7 +33,11 @@
 <hr>
 <div id="detail">
   <h3>Comment</h3>
+  {% if presentation.comment %}
   <p id="comment">{{ presentation.comment }}</p>
+  {% else %}
+  <p id="comment">コメントなし</p>
+  {% endif %}
 </div>
 </body>
 </html>
