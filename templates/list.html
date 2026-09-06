@@ -8,32 +8,58 @@
 </head>
 <body>
 <header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for('list_page') }}">List</a></nav></div></header>
-<h1>発表一覧</h1>
-<form method="get" action="{{ url_for('list_page') }}" id="session-filter">
-  <label for="session_id">開催回:</label>
-  <select name="session_id" id="session_id" onchange="this.form.submit()">
-    <option value="">すべて</option>
-    {% for s in sessions %}
-    <option value="{{ s.id }}" {% if current_session and current_session.id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.event_date_display }})</option>
-    {% endfor %}
-  </select>
-  {% if current_session %}<a href="{{ url_for('list_page') }}">クリア</a>{% endif %}
-</form>
-<div id="list">
-  {% for p in presentations %}
-  <article class="card">
-    <h2><a href="{{ url_for('index', id=p.id) }}">{{ p.title }}</a></h2>
-    <div class="meta">
-      <span>{{ p.presenter_name }}</span>
-      <span>{{ p.grade_display }}</span>
-      <span>{{ p.session.name }}</span>
-      <span>{{ p.session.event_date_display }}</span>
+<main class="list-container">
+  <h1>発表一覧</h1>
+  <form method="get" action="{{ url_for('list_page') }}" id="session-filter" class="list-filter">
+    <div class="filter-row">
+      <label for="session_id">開催回:</label>
+      <select name="session_id" id="session_id" onchange="this.form.submit()">
+        <option value="">すべて</option>
+        {% for s in sessions %}
+        <option value="{{ s.id }}" {% if current_session and current_session.id == s.id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+      <span class="list-count">{{ presentations|length }}件</span>
     </div>
-    <div class="tags">{% for tag in p.tags %}<span>#{{ tag }}</span> {% endfor %}</div>
-  </article>
-  {% else %}
-  <p>発表データがありません。</p>
-  {% endfor %}
-</div>
+    <div class="filter-row search-row">
+      <label for="q">タイトル・ジャンル:</label>
+      <input type="search" name="q" id="q" value="{{ search_query|default('') }}" placeholder="タイトル・ジャンルで検索">
+      <button type="submit" class="btn-search">検索</button>
+      {% if has_filter %}<a href="{{ url_for('list_page') }}" class="filter-clear">クリア</a>{% endif %}
+    </div>
+  </form>
+  <div class="table-wrapper">
+    <table class="list-table">
+      <thead>
+        <tr>
+          <th class="col-name">名前</th>
+          <th class="col-title">タイトル</th>
+          <th class="col-genre">ジャンル</th>
+          <th class="col-session">発表回</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in presentations %}
+        <tr>
+          <td class="col-name">{{ p.presenter_name }}</td>
+          <td class="col-title"><a href="{{ p.detail_url }}">{{ p.title }}</a></td>
+          <td class="col-genre">
+            {% if p.tags %}
+              {% for tag in p.tags %}<span class="tag">#{{ tag }}</span>{% endfor %}
+            {% else %}
+              <span class="no-tag">-</span>
+            {% endif %}
+          </td>
+          <td class="col-session">{{ p.session.name }}</td>
+        </tr>
+        {% else %}
+        <tr class="empty-row">
+          <td colspan="4">条件に一致する発表がありません。</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</main>
 </body>
 </html>

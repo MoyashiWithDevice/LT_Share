@@ -186,6 +186,13 @@ function rowToPresentation(env, row) {
   const eventDate = String(row.s_event_date || "").trim();
   const pdfKey = String(row.pdf_key || "").trim().replace(/^\/+/, "");
   const g = normalizeGradeInput(row.grade);
+  const sessionRound = sessionRoundNumber({ name: row.s_name, id: row.s_id });
+  const presentationOrder = pdfOrderFromKey(pdfKey);
+  const detailUrl = presentationOrder
+    ? `/${sessionRound}/${presentationOrder}`
+    : row.id != null
+      ? `/?id=${row.id}`
+      : "";
   return {
     id: row.id,
     title: row.title || "",
@@ -200,11 +207,13 @@ function rowToPresentation(env, row) {
       event_date_display: eventDate ? eventDate.replace(/-/g, ".") : "",
     },
     session_name: row.s_name || "",
+    session_round: sessionRound,
     event_date: eventDate,
     event_date_display: eventDate ? eventDate.replace(/-/g, ".") : "",
     comment: row.comment || "",
     pdf_key: pdfKey,
-    presentation_order: pdfOrderFromKey(pdfKey),
+    presentation_order: presentationOrder,
+    detail_url: detailUrl,
     pdf_url: pdfUrlFor(env, pdfKey),
     pdf_file: pdfKey,
     tags: [],
@@ -250,18 +259,57 @@ async function getSessions(env) {
   return (res.results || []).map(rowToSession);
 }
 
-async function getAllPresentations(env, sessionId = null) {
-  let res;
+function splitTitleKeywords(raw) {
+  if (!raw) return [];
+  return String(raw)
+    .replace(/　/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
+function escapeLike(s) {
+  return String(s).replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+async function getAllPresentations(env, sessionId = null, titleQuery = "", genreQuery = "", keywordQuery = "") {
+  const titleKeywords =
+    typeof titleQuery === "string" ? splitTitleKeywords(titleQuery) : (titleQuery || []).filter(Boolean);
+  const genreKeywords =
+    typeof genreQuery === "string" ? parseTagInput(genreQuery) : (genreQuery || []).filter(Boolean);
+  const keywordKeywords =
+    typeof keywordQuery === "string" ? parseTagInput(keywordQuery) : (keywordQuery || []).filter(Boolean);
+  const where = [];
+  const params = [];
   if (sessionId !== null && sessionId !== undefined) {
-    res = await mustDB(env)
-      .prepare(`${PRES_SELECT} WHERE p.session_id = ? ORDER BY s.event_date DESC, p.id DESC`)
-      .bind(sessionId)
-      .all();
-  } else {
-    res = await mustDB(env)
-      .prepare(`${PRES_SELECT} ORDER BY s.event_date DESC, p.id DESC`)
-      .all();
+    where.push("p.session_id = ?");
+    params.push(sessionId);
   }
+  for (const kw of titleKeywords) {
+    where.push("p.title LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeLike(kw)}%`);
+  }
+  for (const kw of genreKeywords) {
+    where.push(
+      "EXISTS (SELECT 1 FROM presentation_tags pt " +
+        "JOIN tags t ON t.id = pt.tag_id " +
+        "WHERE pt.presentation_id = p.id AND t.name LIKE ? ESCAPE '\\')"
+    );
+    params.push(`%${escapeLike(kw)}%`);
+  }
+  for (const kw of keywordKeywords) {
+    const like = `%${escapeLike(kw)}%`;
+    where.push(
+      "(p.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM presentation_tags pt " +
+        "JOIN tags t ON t.id = pt.tag_id " +
+        "WHERE pt.presentation_id = p.id AND t.name LIKE ? ESCAPE '\\'))"
+    );
+    params.push(like, like);
+  }
+  let sql = PRES_SELECT;
+  if (where.length) sql += " WHERE " + where.join(" AND ");
+  sql += " ORDER BY s.event_date DESC, p.id DESC";
+  const res = await mustDB(env).prepare(sql).bind(...params).all();
   const items = (res.results || []).map((r) => rowToPresentation(env, r));
   return attachTags(env, items);
 }
@@ -283,6 +331,35 @@ async function getLatestPresentation(env) {
   if (!row) return null;
   const items = await attachTags(env, [rowToPresentation(env, row)]);
   return items[0];
+}
+
+async function getPresentationByRoundOrder(env, roundNum, orderNum) {
+  const round = parseInt(roundNum, 10);
+  const order = parseInt(orderNum, 10);
+  if (!Number.isFinite(round) || !Number.isFinite(order) || order < 1) return null;
+  const sessRes = await mustDB(env).prepare("SELECT * FROM sessions").all();
+  const targetIds = [];
+  for (const s of sessRes.results || []) {
+    try {
+      if (parseInt(sessionRoundNumber(s), 10) === round) targetIds.push(s.id);
+    } catch {
+      continue;
+    }
+  }
+  if (!targetIds.length) return null;
+  for (const sid of targetIds) {
+    const res = await mustDB(env)
+      .prepare(`${PRES_SELECT} WHERE p.session_id = ?`)
+      .bind(sid)
+      .all();
+    const items = await attachTags(
+      env,
+      (res.results || []).map((r) => rowToPresentation(env, r))
+    );
+    const hit = items.find((p) => p.presentation_order === String(order));
+    if (hit) return hit;
+  }
+  return null;
 }
 
 async function getSession(env, sessionId) {
@@ -362,30 +439,30 @@ ${headerHtml()}
 </html>`;
 }
 
-function pageList(presentations, sessions, currentSession) {
+function pageList(presentations, sessions, currentSession, searchQuery = "", hasFilter = false) {
   const opts = sessions
     .map(
       (s) =>
-        `<option value="${s.id}"${currentSession && currentSession.id === s.id ? " selected" : ""}>${esc(s.name)} (${esc(s.event_date_display)})</option>`
+        `<option value="${s.id}"${currentSession && currentSession.id === s.id ? " selected" : ""}>${esc(s.name)}</option>`
     )
     .join("\n");
-  const cards =
+  const rows =
     presentations.length > 0
       ? presentations
           .map(
-            (p) => `<article class="card">
-    <h2><a href="/?id=${p.id}">${esc(p.title)}</a></h2>
-    <div class="meta">
-      <span>${esc(p.presenter_name)}</span>
-      <span>${esc(p.grade_display)}</span>
-      <span>${esc(p.session.name)}</span>
-      <span>${esc(p.session.event_date_display)}</span>
-    </div>
-    <div class="tags">${p.tags.map((t) => `<span>#${esc(t)}</span>`).join(" ")}</div>
-  </article>`
+            (p) => `<tr>
+          <td class="col-name">${esc(p.presenter_name)}</td>
+          <td class="col-title"><a href="${esc(p.detail_url)}">${esc(p.title)}</a></td>
+          <td class="col-genre">${
+            p.tags.length > 0
+              ? p.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join("")
+              : `<span class="no-tag">-</span>`
+          }</td>
+          <td class="col-session">${esc(p.session.name)}</td>
+        </tr>`
           )
           .join("\n")
-      : `<p>発表データがありません。</p>`;
+      : `<tr class="empty-row"><td colspan="4">条件に一致する発表がありません。</td></tr>`;
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -396,18 +473,40 @@ function pageList(presentations, sessions, currentSession) {
 </head>
 <body>
 ${headerHtml()}
-<h1>発表一覧</h1>
-<form method="get" action="/list" id="session-filter">
-  <label for="session_id">開催回:</label>
-  <select name="session_id" id="session_id" onchange="this.form.submit()">
-    <option value="">すべて</option>
-    ${opts}
-  </select>
-  ${currentSession ? `<a href="/list">クリア</a>` : ``}
-</form>
-<div id="list">
-  ${cards}
-</div>
+<main class="list-container">
+  <h1>発表一覧</h1>
+  <form method="get" action="/list" id="session-filter" class="list-filter">
+    <div class="filter-row">
+      <label for="session_id">開催回:</label>
+      <select name="session_id" id="session_id" onchange="this.form.submit()">
+        <option value="">すべて</option>
+        ${opts}
+      </select>
+      <span class="list-count">${presentations.length}件</span>
+    </div>
+    <div class="filter-row search-row">
+      <label for="q">タイトル・ジャンル:</label>
+      <input type="search" name="q" id="q" value="${esc(searchQuery)}" placeholder="タイトル・ジャンルで検索">
+      <button type="submit" class="btn-search">検索</button>
+      ${hasFilter ? `<a href="/list" class="filter-clear">クリア</a>` : ``}
+    </div>
+  </form>
+  <div class="table-wrapper">
+    <table class="list-table">
+      <thead>
+        <tr>
+          <th class="col-name">名前</th>
+          <th class="col-title">タイトル</th>
+          <th class="col-genre">ジャンル</th>
+          <th class="col-session">発表回</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows}
+      </tbody>
+    </table>
+  </div>
+</main>
 </body>
 </html>`;
 }
@@ -625,7 +724,7 @@ function pageAdminEdit(url, p, sessions, passwordSet) {
     <p class="full hint">PDFの差し替えは <code>POST /api/presentations/${p.id}/pdf</code> (form-data <code>file</code>) で行えます。</p>
     <div class="full btn-row">
       <button type="submit" class="btn primary">更新</button>
-      <a class="btn" href="/?id=${p.id}" target="_blank" rel="noopener">表示確認</a>
+      <a class="btn" href="${esc(p.detail_url)}" target="_blank" rel="noopener">表示確認</a>
       <a class="btn" href="/admin/presentations">一覧に戻る</a>
       <button type="submit" class="btn danger" formaction="/admin/presentations/${p.id}/delete" onclick="return confirm('発表 #${p.id}「${esc(p.title)}」を削除しますか？');">削除</button>
     </div>
@@ -640,8 +739,27 @@ function pageAdminEdit(url, p, sessions, passwordSet) {
 async function handleIndex(request, env, url) {
   const idParam = url.searchParams.get("id");
   const pid = idParam ? parseInt(idParam, 10) : null;
+  if (!Number.isFinite(pid)) {
+    // ルートは一覧ページを表示
+    return handleList(request, env, url);
+  }
+  // 旧形式 ?id= は正規URL (/{発表回}/{発表順}) へ誘導
   try {
-    const p = pid ? await getPresentation(env, pid) : await getLatestPresentation(env);
+    const p = await getPresentation(env, pid);
+    if (!p) return html("<h1>発表データが見つかりません</h1>", 404);
+    if (p.detail_url && p.detail_url.startsWith("/") && !p.detail_url.startsWith("/?")) {
+      return redirect(p.detail_url, 302);
+    }
+    return html(pageIndex(p));
+  } catch (e) {
+    console.error(e);
+    return html(`<h1>データ取得に失敗しました</h1><p>${esc(String(e))}</p>`, 502);
+  }
+}
+
+async function handlePresentationDetail(request, env, roundNum, orderNum) {
+  try {
+    const p = await getPresentationByRoundOrder(env, roundNum, orderNum);
     if (!p) return html("<h1>発表データが見つかりません</h1>", 404);
     return html(pageIndex(p));
   } catch (e) {
@@ -653,15 +771,26 @@ async function handleIndex(request, env, url) {
 async function handleList(request, env, url) {
   const sidParam = url.searchParams.get("session_id");
   const sessionId = sidParam ? parseInt(sidParam, 10) : null;
+  let searchQuery = (url.searchParams.get("q") || "").trim();
+  if (!searchQuery) {
+    searchQuery = [url.searchParams.get("title") || "", url.searchParams.get("genre") || ""]
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(" ");
+  }
   try {
     const presentations = await getAllPresentations(
       env,
-      Number.isFinite(sessionId) ? sessionId : null
+      Number.isFinite(sessionId) ? sessionId : null,
+      "",
+      "",
+      searchQuery
     );
     const sessions = await getSessions(env);
     const current =
       Number.isFinite(sessionId) ? sessions.find((s) => s.id === sessionId) || null : null;
-    return html(pageList(presentations, sessions, current));
+    const hasFilter = Boolean(current || searchQuery);
+    return html(pageList(presentations, sessions, current, searchQuery, hasFilter));
   } catch (e) {
     console.error(e);
     return html(`<h1>データ取得に失敗しました</h1><p>${esc(String(e))}</p>`, 502);
@@ -739,6 +868,10 @@ export default {
     if ((m = path.match(/^\/slides\/(\d+)$/)) && method === "GET") {
       return handleSlideRedirect(request, env, parseInt(m[1], 10));
     }
+    // 個別発表ページ: /{発表回番号}/{発表順番号} (例: /1/3)
+    if ((m = path.match(/^\/(\d+)\/(\d+)\/?$/)) && method === "GET") {
+      return handlePresentationDetail(request, env, parseInt(m[1], 10), parseInt(m[2], 10));
+    }
     if (path.startsWith("/r2/") && method === "GET") {
       return handleR2Serve(request, env, path.slice(4));
     }
@@ -808,8 +941,13 @@ export default {
     if (path === "/api/presentations" && method === "GET") {
       const sidParam = url.searchParams.get("session_id");
       const sid = sidParam ? parseInt(sidParam, 10) : null;
+      const titleQ = (url.searchParams.get("title") || "").trim();
+      const genreQ = (url.searchParams.get("genre") || "").trim();
+      const keywordQ = (url.searchParams.get("q") || "").trim();
       try {
-        return json(await getAllPresentations(env, Number.isFinite(sid) ? sid : null));
+        return json(
+          await getAllPresentations(env, Number.isFinite(sid) ? sid : null, titleQ, genreQ, keywordQ)
+        );
       } catch (e) {
         return json({ error: String(e) }, 502);
       }

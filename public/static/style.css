@@ -90,3 +90,177 @@ h3{
   align-items: center;
   color: gray;
 }
+
+/* ===== 一覧ページ (表形式) ===== */
+.list-container{
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  text-align: left;
+}
+.list-container h1{
+  text-align: left;
+  font-size: 24px;
+  margin: 24px 0 16px;
+}
+.list-filter{
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #f8f9fa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+.filter-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.list-filter label{
+  font-weight: bold;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.list-filter select{
+  padding: 6px 10px;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+}
+.search-row input[type="search"]{
+  padding: 6px 10px;
+  font-size: 14px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background: #fff;
+  width: 280px;
+  max-width: 60vw;
+  flex: 1 1 200px;
+}
+.search-row input[type="search"]:focus{
+  outline: 2px solid #b6d4fe;
+  border-color: #86b7fe;
+}
+.btn-search{
+  padding: 6px 16px;
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  background: #0a58ca;
+  border: 1px solid #0a58ca;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn-search:hover{
+  background: #084298;
+}
+.filter-clear{
+  font-size: 13px;
+  color: #0a58ca;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.filter-clear:hover{
+  text-decoration: underline;
+}
+.list-count{
+  margin-left: auto;
+  font-size: 13px;
+  color: #666;
+  white-space: nowrap;
+}
+.table-wrapper{
+  overflow-x: auto;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  background: #fff;
+}
+.list-table{
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+  min-width: 640px;
+}
+.list-table thead th{
+  background: #f1f3f5;
+  font-weight: bold;
+  text-align: left;
+  padding: 12px 16px;
+  border-bottom: 2px solid #dee2e6;
+  white-space: nowrap;
+}
+.list-table tbody td{
+  padding: 12px 16px;
+  border-bottom: 1px solid #e9ecef;
+  vertical-align: middle;
+}
+.list-table tbody tr:last-child td{
+  border-bottom: none;
+}
+.list-table tbody tr:hover{
+  background: #f8f9fa;
+}
+.list-table .col-name{
+  width: 18%;
+  white-space: nowrap;
+}
+.list-table .col-title{
+  width: 42%;
+}
+.list-table .col-title a{
+  color: #0a58ca;
+  text-decoration: none;
+  font-weight: 600;
+}
+.list-table .col-title a:hover{
+  text-decoration: underline;
+}
+.list-table .col-genre{
+  width: 25%;
+}
+.list-table .col-session{
+  width: 15%;
+  white-space: nowrap;
+  text-align: center;
+}
+thead .col-session{
+  text-align: center;
+}
+.list-table .tag{
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  padding: 2px 8px;
+  font-size: 13px;
+  color: #495057;
+  background: #e9ecef;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.list-table .no-tag{
+  color: #adb5bd;
+}
+.list-table .empty-row td{
+  text-align: center;
+  padding: 32px 16px;
+  color: #868e96;
+}
+@media (max-width: 640px){
+  body{
+    width: 94%;
+  }
+  .header-inner{
+    width: 94%;
+  }
+  .list-table{
+    font-size: 14px;
+  }
+  .list-table thead th,
+  .list-table tbody td{
+    padding: 10px 12px;
+  }
+}

@@ -44,7 +44,7 @@
     <p class="full hint">PDFキーは開催回と発表順から自動生成されます。</p>
     <div class="full btn-row">
       <button type="submit" class="btn primary">更新</button>
-      <a class="btn" href="{{ url_for('index', id=presentation.id) }}" target="_blank" rel="noopener">表示確認</a>
+      <a class="btn" href="{{ presentation.detail_url }}" target="_blank" rel="noopener">表示確認</a>
       <a class="btn" href="{{ url_for('admin_presentations') }}">一覧に戻る</a>
       <button type="submit" class="btn danger" formaction="{{ url_for('admin_delete_presentation', presentation_id=presentation.id) }}" onclick="return confirm('発表 #{{ presentation.id }}「{{ presentation.title }}」を削除しますか？');">削除</button>
     </div>

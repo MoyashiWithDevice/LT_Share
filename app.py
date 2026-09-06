@@ -314,6 +314,13 @@ def row_to_presentation(row):
         pdf_url = f"/data/{pdf_key}" if pdf_key else ""
     _grade = normalize_grade_input(row.get("grade"))
     grade = _grade if _grade is not None else ""
+    session_round = session_round_number({"name": row.get("s_name"), "id": row.get("s_id")})
+    presentation_order = pdf_order_from_key(pdf_key)
+    detail_url = (
+        f"/{session_round}/{presentation_order}"
+        if presentation_order
+        else (f"/?id={row.get('id')}" if row.get("id") is not None else "")
+    )
     return {
         "id": row.get("id"),
         "title": row.get("title") or "",
@@ -328,11 +335,13 @@ def row_to_presentation(row):
             "event_date_display": event_date.replace("-", ".") if event_date else "",
         },
         "session_name": row.get("s_name") or "",
+        "session_round": session_round,
         "event_date": event_date,
         "event_date_display": event_date.replace("-", ".") if event_date else "",
         "comment": row.get("comment") or "",
         "pdf_key": pdf_key,
-        "presentation_order": pdf_order_from_key(pdf_key),
+        "presentation_order": presentation_order,
+        "detail_url": detail_url,
         "pdf_url": pdf_url,
         "pdf_file": pdf_key,
         "tags": [],  # 後で付与
@@ -381,6 +390,35 @@ def get_latest_presentation():
     return _attach_tags([row_to_presentation(rows[0])])[0]
 
 
+def get_presentation_by_round_order(round_num, order_num):
+    """発表回番号・発表順番号から発表1件を取得。URL /{round}/{order} 用。"""
+    try:
+        round_num, order_num = int(round_num), int(order_num)
+    except (TypeError, ValueError):
+        return None
+    if order_num < 1:
+        return None
+    try:
+        sess_rows = db_query("SELECT * FROM sessions")
+    except Exception:
+        raise
+    target_ids = []
+    for s in sess_rows:
+        try:
+            if int(session_round_number(s)) == round_num:
+                target_ids.append(s["id"])
+        except (TypeError, ValueError):
+            continue
+    if not target_ids:
+        return None
+    for sid in target_ids:
+        rows = db_query(f"{_PRES_SELECT} WHERE p.session_id = ?", [sid])
+        for p in _attach_tags([row_to_presentation(r) for r in rows]):
+            if p.get("presentation_order") == str(order_num):
+                return p
+    return None
+
+
 def parse_tag_input(raw):
     """カンマ/スペース/# 区切りのタグ入力を正規化。重複除去・順序保持。"""
     if not raw:
@@ -414,14 +452,65 @@ def set_presentation_tags(presentation_id, tag_names):
             )
 
 
-def get_all_presentations(session_id=None):
-    if session_id is not None:
-        rows = db_query(
-            f"{_PRES_SELECT} WHERE p.session_id = ? ORDER BY s.event_date DESC, p.id DESC",
-            [session_id],
-        )
+def split_title_keywords(raw):
+    """タイトル検索用: 空白区切りでキーワード分割 (AND検索)。"""
+    if not raw:
+        return []
+    text = str(raw).replace("　", " ")
+    return [w.strip() for w in text.split() if w.strip()]
+
+
+def escape_like(s):
+    """LIKEパターン用エスケープ (\\, %, _)。"""
+    return str(s).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def get_all_presentations(session_id=None, title_query=None, genre_query=None, keyword_query=None):
+    """開催回・タイトル・ジャンル(タグ)で絞り込み取得。
+
+    - title_query: 文字列またはキーワードリスト。タイトルに全キーワードを含む(AND・部分一致)
+    - genre_query: 文字列またはタグ名リスト。指定タグを全て含む発表に絞る(AND・部分一致)
+    - keyword_query: 文字列またはキーワードリスト。タイトルorジャンルのどちらかに全キーワードを含む(AND・部分一致)
+    """
+    if isinstance(title_query, str):
+        title_keywords = split_title_keywords(title_query)
     else:
-        rows = db_query(f"{_PRES_SELECT} ORDER BY s.event_date DESC, p.id DESC")
+        title_keywords = [t for t in (title_query or []) if str(t).strip()]
+    if isinstance(genre_query, str):
+        genre_keywords = parse_tag_input(genre_query)
+    else:
+        genre_keywords = [g for g in (genre_query or []) if str(g).strip()]
+    if isinstance(keyword_query, str):
+        keyword_keywords = parse_tag_input(keyword_query)
+    else:
+        keyword_keywords = [k for k in (keyword_query or []) if str(k).strip()]
+    where, params = [], []
+    if session_id is not None:
+        where.append("p.session_id = ?")
+        params.append(session_id)
+    for kw in title_keywords:
+        where.append("p.title LIKE ? ESCAPE '\\'")
+        params.append(f"%{escape_like(kw)}%")
+    for kw in genre_keywords:
+        where.append(
+            "EXISTS (SELECT 1 FROM presentation_tags pt "
+            "JOIN tags t ON t.id = pt.tag_id "
+            "WHERE pt.presentation_id = p.id AND t.name LIKE ? ESCAPE '\\')"
+        )
+        params.append(f"%{escape_like(kw)}%")
+    for kw in keyword_keywords:
+        like = f"%{escape_like(kw)}%"
+        where.append(
+            "(p.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM presentation_tags pt "
+            "JOIN tags t ON t.id = pt.tag_id "
+            "WHERE pt.presentation_id = p.id AND t.name LIKE ? ESCAPE '\\'))"
+        )
+        params.extend([like, like])
+    sql = _PRES_SELECT
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY s.event_date DESC, p.id DESC"
+    rows = db_query(sql, params)
     return _attach_tags([row_to_presentation(r) for r in rows])
 
 
@@ -430,10 +519,30 @@ def get_all_presentations(session_id=None):
 
 @app.route("/")
 def index():
-    """?id= 指定があればその発表、無ければ最新をD1から取得して表示。PDFはR2のURL。"""
+    """ルートは一覧ページを表示。旧形式 ?id= 指定時は正規URLへリダイレクト。"""
     pid = request.args.get("id", type=int)
+    if pid is None:
+        # 一覧表示 (list_page と同じ絞り込みに対応)
+        return list_page()
     try:
-        presentation = get_presentation(pid) if pid else get_latest_presentation()
+        presentation = get_presentation(pid)
+    except Exception as e:  # noqa: BLE001
+        log.exception("D1取得エラー")
+        abort(502, description=f"データ取得に失敗しました: {e}")
+    if presentation is None:
+        abort(404, description="発表データが見つかりません")
+    # 旧URLから正規URL (/{発表回}/{発表順}) へ誘導
+    detail_url = presentation.get("detail_url") or ""
+    if detail_url.startswith("/"):
+        return redirect(detail_url, code=302)
+    return render_template("index.html", presentation=presentation)
+
+
+@app.route("/<int:round_num>/<int:order_num>")
+def presentation_detail(round_num, order_num):
+    """個別発表ページ。URL形式: /{発表回番号}/{発表順番号} (例: /1/3)。"""
+    try:
+        presentation = get_presentation_by_round_order(round_num, order_num)
     except Exception as e:  # noqa: BLE001
         log.exception("D1取得エラー")
         abort(502, description=f"データ取得に失敗しました: {e}")
@@ -444,10 +553,22 @@ def index():
 
 @app.route("/list")
 def list_page():
-    """?session_id= で開催回絞り込み可。"""
+    """?session_id= で開催回、?q= でタイトル・ジャンル(タグ)絞り込み可。"""
     session_id = request.args.get("session_id", type=int)
+    search_query = (request.args.get("q") or "").strip()
+    # 旧パラメータ (?title= / ?genre=) との後方互換: q が空なら旧値を引き継ぐ
+    if not search_query:
+        legacy = " ".join(
+            [
+                (request.args.get("title") or "").strip(),
+                (request.args.get("genre") or "").strip(),
+            ]
+        ).strip()
+        search_query = legacy
     try:
-        presentations = get_all_presentations(session_id=session_id)
+        presentations = get_all_presentations(
+            session_id=session_id, keyword_query=search_query
+        )
         sessions = get_sessions()
     except Exception as e:  # noqa: BLE001
         log.exception("D1取得エラー")
@@ -455,11 +576,14 @@ def list_page():
     current_session = None
     if session_id is not None:
         current_session = next((s for s in sessions if s["id"] == session_id), None)
+    has_filter = bool(current_session or search_query)
     return render_template(
         "list.html",
         presentations=presentations,
         sessions=sessions,
         current_session=current_session,
+        search_query=search_query,
+        has_filter=has_filter,
     )
 
 
@@ -526,8 +650,18 @@ def api_create_session():
 @app.route("/api/presentations")
 def api_presentations():
     session_id = request.args.get("session_id", type=int)
+    title_q = (request.args.get("title") or "").strip()
+    genre_q = (request.args.get("genre") or "").strip()
+    keyword_q = (request.args.get("q") or "").strip()
     try:
-        return jsonify(get_all_presentations(session_id=session_id))
+        return jsonify(
+            get_all_presentations(
+                session_id=session_id,
+                title_query=title_q,
+                genre_query=genre_q,
+                keyword_query=keyword_q,
+            )
+        )
     except Exception as e:  # noqa: BLE001
         log.exception("D1取得エラー")
         return jsonify({"error": str(e)}), 502
