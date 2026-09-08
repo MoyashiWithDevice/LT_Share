@@ -18,7 +18,6 @@ D1・R2 はバインディング経由で直接利用します (REST / boto3 不
 ```bash
 # 1. 管理パスワードをシークレット登録 (.env の ADMIN_PASSWORD と同じ値推奨)
 npx wrangler secret put ADMIN_PASSWORD
-# -> pijotto321 を入力 (表示されません)
 
 # 2. デプロイ
 npm run deploy
