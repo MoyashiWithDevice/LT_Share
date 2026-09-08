@@ -25,6 +25,7 @@ bucket_name = "lt-pdf"
 [vars]
 R2_PUBLIC_BASE_URL = "https://pub-9c6fb78fc32546389737119813bc107a.r2.dev"
 
-# ADMIN_PASSWORD はシークレットとして登録:
+# ADMIN_USERNAME / ADMIN_PASSWORD はシークレットとして登録:
+#   npx wrangler secret put ADMIN_USERNAME
 #   npx wrangler secret put ADMIN_PASSWORD
 # ローカル開発は .dev.vars に記述 (本番には上げないこと)

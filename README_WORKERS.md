@@ -19,6 +19,7 @@ D1・R2 はバインディング経由で直接利用します (REST / boto3 / s
 
 ```bash
 # 1. シークレット登録
+npx wrangler secret put ADMIN_USERNAME
 npx wrangler secret put ADMIN_PASSWORD
 npx wrangler secret put SECRET_KEY
 
@@ -44,7 +45,7 @@ uv run pywrangler deploy
 ## ローカル開発
 
 ```bash
-cp .dev.vars.example .dev.vars   # ADMIN_PASSWORD/SECRET_KEY 等を設定
+cp .dev.vars.example .dev.vars   # ADMIN_USERNAME/ADMIN_PASSWORD/SECRET_KEY 等を設定
 uv sync
 npm run dev                       # == uv run pywrangler dev (http://localhost:8787)
 # D1ローカルにスキーマ投入
@@ -97,4 +98,4 @@ npx wrangler r2 object put lt-pdf/Slides/1/1.pdf --file=./data/3.pdf --content-t
 
 - D1 は `request.environ["workers.env"].DB.prepare(...).bind(...).all()/first()/run()` + `run_sync` でアクセス。
 - PDF は `R2_PUBLIC_BASE_URL` があれば公開URLへリダイレクト、なければ `/r2/<key>` で `env.SLIDES.get()` 配信。署名発行・`data/` 配信は廃止。
-- 管理画面認証は Flask `session` + `SECRET_KEY`。`ADMIN_PASSWORD` 未設定時は保護なし (開発用)。
+- 管理画面認証は Flask `session` + `SECRET_KEY`。`ADMIN_USERNAME`・`ADMIN_PASSWORD` のどちらも未設定時は保護なし (開発用)。

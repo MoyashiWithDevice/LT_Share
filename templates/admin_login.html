@@ -19,12 +19,15 @@
   {% endwith %}
   <form method="post" action="{{ url_for('admin_login') }}" class="card-form">
     <input type="hidden" name="next" value="{{ next }}">
+    <label>ユーザ名
+      <input type="text" name="username" value="{{ username|default('') }}" autofocus required autocomplete="username">
+    </label>
     <label>パスワード
-      <input type="password" name="password" autofocus required autocomplete="current-password">
+      <input type="password" name="password" required autocomplete="current-password">
     </label>
     <button type="submit" class="btn primary">ログイン</button>
   </form>
-  <p class="hint">.env の <code>ADMIN_PASSWORD</code> に設定した値を入力してください。</p>
+  <p class="hint">.env の <code>ADMIN_USERNAME</code> と <code>ADMIN_PASSWORD</code> に設定した値を入力してください。</p>
 </main>
 </body>
 </html>

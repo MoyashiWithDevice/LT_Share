@@ -8,6 +8,7 @@
     "db:schema": "pywrangler d1 execute lt-db --remote --file=./schema.sql",
     "db:schema:local": "pywrangler d1 execute lt-db --local --file=./schema.sql",
     "secret:admin": "wrangler secret put ADMIN_PASSWORD",
+    "secret:admin-username": "wrangler secret put ADMIN_USERNAME",
     "secret:flask": "wrangler secret put SECRET_KEY",
     "sync:assets": "cp static/*.css public/static/"
   }
