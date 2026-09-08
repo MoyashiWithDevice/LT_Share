@@ -2,6 +2,9 @@
 .dev.vars
 dev.db
 .venv/
+.venv-workers/
 __pycache__/
 .wrangler/
 node_modules/
+python_modules/
+pylock.toml

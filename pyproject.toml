@@ -1,0 +1,19 @@
+[project]
+name = "lt-share"
+version = "0.1.0"
+description = "LT Share - Python Workers (Flask + WSGI) + D1/R2"
+readme = "README_WORKERS.md"
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.0",
+    "workers-runtime-sdk>=1.8.2",
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+]
+
+[tool.wrangler]
+# pywrangler が wrangler.toml を読む。main は src/worker.py (python_workers)

@@ -6,6 +6,8 @@ body{
   margin: 0 auto;
   text-align: center;
   padding-top: 76px;
+
+  margin-bottom: 30px;
 }
 #site-header{
   position: fixed;
@@ -74,6 +76,7 @@ body{
 #detail{
   width: 60%;
   margin: 0 auto;
+  margin-bottom: 30px;
   display: flex;
   flex-direction: column;
 }
@@ -130,6 +133,9 @@ h3{
   border: 1px solid #ccc;
   border-radius: 6px;
   background: #fff;
+}
+.check-label{
+  margin-left: 20px;
 }
 .search-row input[type="search"]{
   padding: 6px 10px;
@@ -376,4 +382,39 @@ thead .col-session{
   align-items: center;
   gap: 6px;
   cursor: pointer;
+}
+.nav-button{
+  max-width: 45%;
+
+  color: inherit;
+  text-decoration: none;
+}
+.button-container{
+  border: 2px solid black;
+  border-radius: 8px;
+  background-color: white;
+  font-weight: bold;
+
+  display: flex;
+  flex-direction: column;
+  padding: 5px 10px;
+}
+.button-container>div{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+footer{
+  display: flex;
+  width: 60%;
+  margin: 0 auto;
+  justify-content: space-between;
+}
+.btn-prev{
+  display: flex;
+  text-align: left;
+}
+.btn-next{
+  display: flex;
+  text-align: right;
 }

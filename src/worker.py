@@ -1,18 +1,19 @@
-"""LT Share - メタデータは D1、PDF実体は Cloudflare R2 から取得する Flask アプリ.
+"""LT Share - Python Workers版 (Flask + WSGI).
 
-データモデル:
-  sessions: 開催回マスタ (第1回 / 開催日)。日付はここで一元管理。
-  presentations: 各発表。session_id で sessions に紐づく。日付はJOINで取得。
+app.py の Workers移植:
+  - D1/R2 はバインディング経由 (request.environ["workers.env"]) + run_sync
+  - requests / boto3 / sqlite3 / dotenv / data/フォールバックは使わない
+  - 静的CSSは [assets] (./public) から配信
+  - templates/ は FilesystemLoader (pywrangler同梱) + DictLoader埋め込みのChoiceLoader
 """
 import logging
 import os
 import re
-import sqlite3
 from functools import wraps
 
-import requests
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     jsonify,
@@ -21,7 +22,6 @@ from flask import (
     request,
     session,
     url_for,
-    send_from_directory,
 )
 
 try:
@@ -31,20 +31,145 @@ try:
 except ImportError:
     pass
 
-app = Flask(__name__)
+# ---- Workers互換 import (CPythonでは未導入でも動くようガード) ----
+try:
+    from workers import wsgi as _wsgi  # type: ignore
+except Exception:  # noqa: BLE001
+    _wsgi = None
+
+try:
+    from pyodide.ffi import run_sync as _run_sync  # type: ignore
+except Exception:  # noqa: BLE001
+    _run_sync = None
+
+try:
+    from js import Object as _JsObject  # type: ignore
+except Exception:  # noqa: BLE001
+    _JsObject = None
+
+try:
+    from pyodide.ffi import to_js as _to_js  # type: ignore
+except Exception:  # noqa: BLE001
+    _to_js = None
+
+
+def _run_await(coro):
+    """Workers(Pyodide)のrun_sync。CPython直実行時はasyncio.runにフォールバック。"""
+    if _run_sync is not None:
+        return _run_sync(coro)
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    raise RuntimeError("run_sync unavailable inside running loop (CPython)")
+
+
+_BASE = os.path.dirname(__file__)
+_TEMPLATES_DIR = os.path.abspath(os.path.join(_BASE, "..", "templates"))
+_STATIC_DIR = os.path.abspath(os.path.join(_BASE, "..", "public", "static"))
+
+app = Flask(__name__, template_folder=_TEMPLATES_DIR, static_folder=_STATIC_DIR)
+
+# Workers本番は templates/ が同梱されないため DictLoader 埋め込みをフォールバックに。
+# templates/ が正本。変更後は scripts/sync_worker_templates.py で src/_templates.py を再生成。
+from jinja2 import ChoiceLoader, DictLoader, FileSystemLoader
+
+_EMBEDDED_TEMPLATES = {
+'index.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>{{ presentation.title }} | LT Share</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for(\'list_page\') }}">List</a></nav></div></header>\n{% if presentation.has_link %}\n<div id="object-wrapper">\n  <div class="slide-link-card">\n    <div class="slide-link-icon">🔗</div>\n    <p class="slide-link-text">この発表の資料は外部リンクで公開されています</p>\n    <a class="slide-link-url" href="{{ presentation.slide_url }}" target="_blank" rel="noopener">{{ presentation.slide_url }}</a>\n  </div>\n</div>\n{% elif presentation.has_pdf %}\n<div id="object-wrapper">\n  <object id="slide" data="{{ presentation.pdf_url }}"></object>\n</div>\n{% else %}\n<div id="object-wrapper">\n  <div class="no-slide">\n    <div class="no-slide-icon">📄</div>\n    <p>資料なし</p>\n  </div>\n</div>\n{% endif %}\n<div id="title"><h1 id="title-name">{{ presentation.title }}</h1><div id="title-tag">{% for tag in presentation.tags %}<span>#{{ tag }}</span>{% else %}<span class="no-tag">タグ未設定</span>{% endfor %}</div></div>\n<div id="other"><div id="person"><span id="name">{{ presentation.presenter_name }}</span><span>{{ presentation.grade_display }}</span></div><div id="date"><span>{{ presentation.session.name }}</span><span>{{ presentation.session.event_date_display }}</span></div></div>\n<hr>\n<div id="detail">\n  <h3>Comment</h3>\n  {% if presentation.comment %}\n  <p id="comment">{{ presentation.comment }}</p>\n  {% else %}\n  <p id="comment">コメントなし</p>\n  {% endif %}\n</div>\n<footer>\n{% if prev %}\n  <a href="{{ url_for(\'presentation_detail\', round_num=prev.session_round|int, order_num=prev.presentation_order|int) }}" class="nav-button prev"><div class="button-container btn-prev"><div>← 前の記事:</div><div>{{ prev.title }}</div></div></a>\n{% endif %}\n{% if next %}\n  <a href="{{ url_for(\'presentation_detail\', round_num=next.session_round|int, order_num=next.presentation_order|int) }}" class="nav-button next"><div class="button-container btn-next"><div>→ 次の記事:</div><div>{{ next.title }}</div></div></a>\n{% endif %}\n</footer>\n</body>\n</html>\n',
+'list.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>List | LT Share</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share</span><nav class="header-nav"><a href="{{ url_for(\'list_page\') }}">List</a></nav></div></header>\n<main class="list-container">\n  <h1>発表一覧</h1>\n  <form method="get" action="{{ url_for(\'list_page\') }}" id="session-filter" class="list-filter"> \n    <div class="filter-row search-row">\n      <label for="q">タイトル・ジャンル:</label>\n      <input type="search" name="q" id="q" value="{{ search_query|default(\'\') }}" placeholder="タイトル・ジャンルで検索">\n      <button type="submit" class="btn-search">検索</button>\n      {% if has_filter %}<a href="{{ url_for(\'list_page\') }}" class="filter-clear">クリア</a>{% endif %}\n    </div>\n    <div class="filter-row">\n      <label for="session_id">開催回:</label>\n      <select name="session_id" id="session_id" onchange="this.form.submit()">\n        <option value="">すべて</option>\n        {% for s in sessions %}\n        <option value="{{ s.id }}" {% if current_session and current_session.id == s.id %}selected{% endif %}>{{ s.name }}</option>\n        {% endfor %}\n      </select>\n      <label class="check-label"><input type="checkbox" name="has_slide" value="1" {% if has_slide_only %}checked{% endif %} onchange="this.form.submit()"> 資料ありのみ</label>\n      <span class="list-count">{{ presentations|length }}件</span>\n    </div>\n  </form>\n  <div class="table-wrapper">\n    <table class="list-table">\n      <thead>\n        <tr>\n          <th class="col-name">名前</th>\n          <th class="col-title">タイトル</th>\n          <th class="col-genre">ジャンル</th>\n          <th class="col-session">発表回</th>\n          <th class="col-slide">資料</th>\n        </tr>\n      </thead>\n      <tbody>\n        {% for p in presentations %}\n        <tr>\n          <td class="col-name">{{ p.presenter_name }}</td>\n          <td class="col-title"><a href="{{ p.detail_url }}">{{ p.title }}</a></td>\n          <td class="col-genre">\n            {% if p.tags %}\n              {% for tag in p.tags %}<span class="tag">#{{ tag }}</span>{% endfor %}\n            {% else %}\n              <span class="no-tag">-</span>\n            {% endif %}\n          </td>\n          <td class="col-session">{{ p.session.name }}</td>\n          <td class="col-slide">\n            {% if p.has_link %}\n              <a class="slide-badge link" href="{{ p.slide_url }}" target="_blank" rel="noopener">🔗 リンク</a>\n            {% elif p.has_pdf %}\n              <a class="slide-badge pdf" href="{{ p.pdf_url }}" target="_blank" rel="noopener">📄 PDF</a>\n            {% else %}\n              <span class="slide-badge none">資料なし</span>\n            {% endif %}\n          </td>\n        </tr>\n        {% else %}\n        <tr class="empty-row">\n          <td colspan="5">条件に一致する発表がありません。</td>\n        </tr>\n        {% endfor %}\n      </tbody>\n    </table>\n  </div>\n</main>\n</body>\n</html>\n',
+'admin.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>管理画面 | LT Share</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'admin.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for(\'list_page\') }}">List</a><a href="{{ url_for(\'index\') }}">Top</a>{% if password_set %}<a href="{{ url_for(\'admin_logout\') }}">Logout</a>{% endif %}</nav></div></header>\n\n<main class="admin-container">\n  <div class="admin-title-row">\n    <h1>DB管理</h1>\n    {% if not password_set %}\n    <p class="flash warning">⚠ ADMIN_PASSWORD 未設定のため保護なしで公開されています。本番では必ず .env に設定してください。</p>\n    {% endif %}\n  </div>\n\n  {% with messages = get_flashed_messages(with_categories=true) %}\n    {% for category, message in messages %}\n    <p class="flash {{ category }}">{{ message }}</p>\n    {% endfor %}\n  {% endwith %}\n\n  <div class="stats">\n    <div class="stat">発表 <strong>{{ presentations|length }}</strong> 件</div>\n    <div class="stat">開催回 <strong>{{ sessions|length }}</strong> 件</div>\n  </div>\n\n  <nav class="admin-tabs">\n    <a href="#presentations">発表の追加</a>\n    <a href="#sessions">開催回 ({{ sessions|length }})</a>\n    <a href="{{ url_for(\'admin_presentations\') }}">発表一覧・編集 ({{ presentations|length }}) →</a>\n  </nav>\n\n  <!-- ===== 発表 ===== -->\n  <section id="presentations" class="admin-section">\n    <h2>発表の追加</h2>\n    <form method="post" action="{{ url_for(\'admin_create_presentation\') }}" class="card-form grid">\n      <label>タイトル *<input name="title" required maxlength="200" placeholder="例: Docker入門"></label>\n      <label>発表者<input name="presenter_name" maxlength="100" placeholder="例: I.B."></label>\n      <label>学年\n        <select name="grade">\n          <option value="">(未設定)</option>\n          <option value="1">1</option>\n          <option value="2">2</option>\n          <option value="3">3</option>\n          <option value="4">4</option>\n        </select>\n      </label>\n      <label>開催回 *\n        <select name="session_id" required>\n          <option value="">選択してください</option>\n          {% for s in sessions %}\n          <option value="{{ s.id }}">{{ s.name }} ({{ s.event_date_display }})</option>\n          {% endfor %}\n        </select>\n      </label>\n      <label>発表順 *<input name="presentation_order" type="number" min="1" step="1" required placeholder="例: 3"></label>\n      <label class="full check-label"><input type="checkbox" name="no_pdf" value="1"> PDFなし (資料なし・または外部リンクのみで公開)</label>\n      <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>\n      <label class="full">コメント<textarea name="comment" rows="2" placeholder="発表の概要・補足"></textarea></label>\n      <p class="full hint">PDFキー（例: 第1回＋3 → Slides/1/3.pdf）は開催回と発表順から自動生成されます。「PDFなし」にするとキーは空で保存され、詳細ページに「資料なし」と表示されます。</p>\n      <label class="full">タグ (カンマ/スペース区切り)<input name="tags" placeholder="例: Linux, Docker"></label>\n      <div class="full"><button type="submit" class="btn primary">発表を追加</button></div>\n    </form>\n\n  </section>\n\n  <!-- ===== 開催回 ===== -->\n  <section id="sessions" class="admin-section">\n    <h2>開催回</h2>\n    <p class="hint">一番上の行から新規追加、各行で編集・削除できます。</p>\n    <table class="admin-table">\n      <thead><tr><th>ID</th><th>開催回名</th><th>開催日</th><th>発表数</th><th>操作</th></tr></thead>\n      <tbody>\n      <tr class="new-row">\n        <form method="post" action="{{ url_for(\'admin_create_session\') }}">\n          <td>新規</td>\n          <td><input name="name" required placeholder="例: 第3回"></td>\n          <td><input type="date" name="event_date"></td>\n          <td>—</td>\n          <td><button type="submit" class="btn small primary">追加</button></td>\n        </form>\n      </tr>\n      {% for s in sessions %}\n      <tr>\n        <form method="post" action="{{ url_for(\'admin_update_session\', session_id=s.id) }}">\n          <td>{{ s.id }}</td>\n          <td><input name="name" value="{{ s.name }}" required></td>\n          <td><input type="date" name="event_date" value="{{ s.event_date }}"></td>\n          <td>{{ s.presentation_count }}</td>\n          <td class="btn-row">\n            <button type="submit" class="btn small primary">更新</button>\n            <button type="submit" class="btn small danger" formaction="{{ url_for(\'admin_delete_session\', session_id=s.id) }}" onclick="return confirm(\'開催回「{{ s.name }}」を削除しますか？\');">削除</button>\n          </td>\n        </form>\n      </tr>\n      {% endfor %}\n      </tbody>\n    </table>\n  </section>\n\n</main>\n</body>\n</html>\n',
+'admin_login.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>管理者ログイン | LT Share</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'admin.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for(\'list_page\') }}">List</a></nav></div></header>\n<main class="admin-container narrow">\n  <h1>管理者ログイン</h1>\n  {% if error %}<p class="flash error">{{ error }}</p>{% endif %}\n  {% with messages = get_flashed_messages(with_categories=true) %}\n    {% for category, message in messages %}\n    <p class="flash {{ category }}">{{ message }}</p>\n    {% endfor %}\n  {% endwith %}\n  <form method="post" action="{{ url_for(\'admin_login\') }}" class="card-form">\n    <input type="hidden" name="next" value="{{ next }}">\n    <label>パスワード\n      <input type="password" name="password" autofocus required autocomplete="current-password">\n    </label>\n    <button type="submit" class="btn primary">ログイン</button>\n  </form>\n  <p class="hint">.env の <code>ADMIN_PASSWORD</code> に設定した値を入力してください。</p>\n</main>\n</body>\n</html>\n',
+'admin_presentations.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>発表一覧・編集 | LT Share Admin</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'admin.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for(\'admin_dashboard\') }}">管理トップ</a><a href="{{ url_for(\'list_page\') }}">List</a>{% if password_set %}<a href="{{ url_for(\'admin_logout\') }}">Logout</a>{% endif %}</nav></div></header>\n\n<main class="admin-container">\n  <div class="list-head-row">\n    <h1>発表一覧・編集</h1>\n    <a class="btn primary small" href="{{ url_for(\'admin_dashboard\') }}#presentations">＋ 新規登録</a>\n  </div>\n\n  {% with messages = get_flashed_messages(with_categories=true) %}\n    {% for category, message in messages %}\n    <p class="flash {{ category }}">{{ message }}</p>\n    {% endfor %}\n  {% endwith %}\n\n  <table class="admin-table">\n    <thead><tr><th>発表回</th><th>発表順</th><th>タイトル</th><th>資料</th></tr></thead>\n    <tbody>\n    {% for p in presentations %}\n    <tr>\n      <td>{{ p.session.name }}</td>\n      <td>{{ p.presentation_order }}</td>\n      <td><a href="{{ url_for(\'admin_edit_presentation\', presentation_id=p.id) }}">{{ p.title }}</a></td>\n      <td>{% if p.has_link %}🔗 <a href="{{ p.slide_url }}" target="_blank" rel="noopener">リンク</a>{% elif p.has_pdf %}📄 PDF{% else %}<span class="no-tag">資料なし</span>{% endif %}</td>\n    </tr>\n    {% else %}\n    <tr><td colspan="4">発表データがありません。</td></tr>\n    {% endfor %}\n    </tbody>\n  </table>\n</main>\n</body>\n</html>\n',
+'admin_presentation_edit.html': '<!DOCTYPE html>\n<html lang="ja">\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>発表の編集 #{{ presentation.id }} | LT Share Admin</title>\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'style.css\') }}">\n  <link rel="stylesheet" href="{{ url_for(\'static\', filename=\'admin.css\') }}">\n</head>\n<body>\n<header id="site-header"><div class="header-inner"><span class="logo">LT Share <span class="admin-badge">Admin</span></span><nav class="header-nav"><a href="{{ url_for(\'admin_presentations\') }}">発表一覧</a><a href="{{ url_for(\'admin_dashboard\') }}">管理トップ</a>{% if password_set %}<a href="{{ url_for(\'admin_logout\') }}">Logout</a>{% endif %}</nav></div></header>\n\n<main class="admin-container">\n  <h1>発表の編集 #{{ presentation.id }}</h1>\n\n  {% with messages = get_flashed_messages(with_categories=true) %}\n    {% for category, message in messages %}\n    <p class="flash {{ category }}">{{ message }}</p>\n    {% endfor %}\n  {% endwith %}\n\n  <form method="post" action="{{ url_for(\'admin_update_presentation\', presentation_id=presentation.id) }}" class="card-form grid">\n    <label>タイトル *<input name="title" value="{{ presentation.title }}" required maxlength="200"></label>\n    <label>発表者<input name="presenter_name" value="{{ presentation.presenter_name }}" maxlength="100"></label>\n    <label>学年\n      <select name="grade">\n        <option value="" {% if not presentation.grade %}selected{% endif %}>(未設定)</option>\n        <option value="1" {% if presentation.grade == "1" %}selected{% endif %}>1</option>\n        <option value="2" {% if presentation.grade == "2" %}selected{% endif %}>2</option>\n        <option value="3" {% if presentation.grade == "3" %}selected{% endif %}>3</option>\n        <option value="4" {% if presentation.grade == "4" %}selected{% endif %}>4</option>\n      </select>\n    </label>\n    <label>開催回 *\n      <select name="session_id" required>\n        {% for s in sessions %}\n        <option value="{{ s.id }}" {% if presentation.session_id == s.id %}selected{% endif %}>{{ s.name }} ({{ s.event_date_display }})</option>\n        {% endfor %}\n      </select>\n    </label>\n    <label class="full">発表順 *<input name="presentation_order" type="number" min="1" step="1" required value="{{ presentation.presentation_order }}" placeholder="例: 3"></label>\n    <label class="full check-label"><input type="checkbox" name="no_pdf" value="1" {% if not presentation.has_pdf %}checked{% endif %}> PDFなし (資料なし・または外部リンクのみで公開)</label>\n    <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" value="{{ presentation.slide_url }}" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>\n    <label class="full">コメント<textarea name="comment" rows="3">{{ presentation.comment }}</textarea></label>\n    <label class="full">タグ (カンマ/スペース区切り)<input name="tags" value="{{ presentation.tags|join(\', \') }}" placeholder="例: Linux, Docker"></label>\n    <p class="full hint">PDFキーは開催回と発表順から自動生成されます。現在の状態: {% if presentation.has_link %}<strong>外部リンク</strong> (外部リンク優先で表示されます){% elif presentation.has_pdf %}<strong>PDFあり</strong> (<code>{{ presentation.pdf_key }}</code>){% else %}<strong>資料なし</strong>{% endif %}</p>\n    <div class="full btn-row">\n      <button type="submit" class="btn primary">更新</button>\n      <a class="btn" href="{{ presentation.detail_url }}" target="_blank" rel="noopener">表示確認</a>\n      <a class="btn" href="{{ url_for(\'admin_presentations\') }}">一覧に戻る</a>\n      <button type="submit" class="btn danger" formaction="{{ url_for(\'admin_delete_presentation\', presentation_id=presentation.id) }}" onclick="return confirm(\'発表 #{{ presentation.id }}「{{ presentation.title }}」を削除しますか？\');">削除</button>\n    </div>\n  </form>\n</main>\n</body>\n</html>\n',
+}
+try:
+    app.jinja_loader = ChoiceLoader(
+        [FileSystemLoader(_TEMPLATES_DIR), DictLoader(_EMBEDDED_TEMPLATES)]
+    )
+except Exception:  # noqa: BLE001
+    pass
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # ---------- Admin 認証設定 ----------
-# ADMIN_PASSWORD を .env に設定すると管理画面にパスワードが必要になる。
-# 未設定時は開発用としてパスワードなしで入れる (警告表示あり)。
+# 本番は wrangler secret put ADMIN_PASSWORD / SECRET_KEY
+# ローカルは .dev.vars (workers.env) または .env (os.getenv)
+
+
+# ---------- Workers env helpers ----------
+# .dev.vars / secret は request.environ["workers.env"] に入る。
+# os.getenv は旧Flask(.env)互換のフォールバック。
+
+
+def _workers_env():
+    try:
+        from flask import has_request_context
+
+        if has_request_context():
+            e = request.environ.get("workers.env")
+            if e is not None:
+                return e
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from workers import env as _top_env  # type: ignore
+
+        return _top_env
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def get_env(name, default=""):
+    e = _workers_env()
+    if e is not None:
+        try:
+            v = getattr(e, name, None)
+            if v is not None:
+                return str(v)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            # JsProxy dict風アクセスのフォールバック
+            v = e[name]  # type: ignore
+            if v is not None:
+                return str(v)
+        except Exception:  # noqa: BLE001
+            pass
+    v = os.getenv(name, default)
+    return v if v is not None else default
+
+
+def get_admin_password():
+    return get_env("ADMIN_PASSWORD", "")
+
+
+def get_secret_key():
+    return get_env("SECRET_KEY", "") or get_env("ADMIN_PASSWORD", "") or "dev-secret-change-me"
+
+
+def get_r2_public_base():
+    return get_env("R2_PUBLIC_BASE_URL", "").rstrip("/")
+
+
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+
+
+@app.before_request
+def _sync_secret_from_env():
+    # Workers secret はリクエスト毎にしか取れないためここで反映
+    try:
+        sk = get_secret_key()
+        if sk:
+            app.secret_key = sk
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def is_admin():
     """管理者としてログイン済みか。パスワード未設定時は常にTrue (開発用)。"""
-    if not ADMIN_PASSWORD:
+    if not get_admin_password():
         return True
     return bool(session.get("admin"))
 
@@ -64,190 +189,153 @@ def admin_api_required(view):
     """書き込み系API用。未ログイン時はJSON 401を返す (パスワード設定時のみ)。"""
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if ADMIN_PASSWORD and not session.get("admin"):
+        if get_admin_password() and not session.get("admin"):
             return jsonify({"error": "admin login required"}), 401
         return view(*args, **kwargs)
     return wrapped
 
-# ---------- D1 設定 ----------
-CF_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "")
-CF_DATABASE_ID = os.getenv("CLOUDFLARE_DATABASE_ID", "")
-CF_API_TOKEN = os.getenv("CLOUDFLARE_D1_API_TOKEN", "") or os.getenv("CLOUDFLARE_API_TOKEN", "")
-LOCAL_DB_PATH = os.getenv("LOCAL_DB_PATH", "./dev.db")
 
-D1_ENABLED = bool(CF_ACCOUNT_ID and CF_DATABASE_ID and CF_API_TOKEN)
-D1_API_BASE = (
-    f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-    f"/d1/database/{CF_DATABASE_ID}"
-    if D1_ENABLED
-    else ""
-)
-
-# ---------- R2 設定 ----------
-# PDFバイナリはR2に保管し、D1にはオブジェクトキー(pdf_key)のみ持つ。
-# 公開バケット運用: R2_PUBLIC_BASE_URL を設定 (例: https://pub-xxx.r2.dev / https://slides.example.com)
-# 非公開バケット運用: R2_ENDPOINT_URL + ACCESS_KEY + SECRET で署名付きURLを発行
-R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "")
-R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL", "").rstrip("/")
-R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", "")  # 例: https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
-R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
-R2_PRESIGN_EXPIRES = int(os.getenv("R2_PRESIGN_EXPIRES", "3600") or "3600")
-
-_s3_client = None
-
-
-def r2_mode():
-    """public / presigned / local のいずれかを返す。"""
-    if R2_PUBLIC_BASE_URL:
-        return "public"
-    if R2_ENDPOINT_URL and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME:
-        return "presigned"
-    return "local"
-
-
-def _s3():
-    """R2(S3互換)クライアントを遅延生成・再利用。boto3未導入時は例外。"""
-    global _s3_client
-    if _s3_client is not None:
-        return _s3_client
-    import boto3  # 遅延import: public/local 運用では不要
-
-    _s3_client = boto3.client(
-        "s3",
-        endpoint_url=R2_ENDPOINT_URL,
-        aws_access_key_id=R2_ACCESS_KEY_ID,
-        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-    )
-    return _s3_client
-
-
-def pdf_url_for(pdf_key):
-    """R2オブジェクトキー -> ブラウザが表示できるURL。
-
-    - publicモード: 公開URL直結 (署名不要・高速)
-    - presignedモード: S3署名付きURLを発行
-    - localモード: 旧 data/ フォルダ配信 (開発用フォールバック)
-    """
-    if not pdf_key:
-        return ""
-    key = pdf_key.lstrip("/")
-    if R2_PUBLIC_BASE_URL:
-        return f"{R2_PUBLIC_BASE_URL}/{key}"
-    if r2_mode() == "presigned":
-        try:
-            return _s3().generate_presigned_url(
-                "get_object",
-                Params={"Bucket": R2_BUCKET_NAME, "Key": key},
-                ExpiresIn=R2_PRESIGN_EXPIRES,
-            )
-        except Exception:
-            log.exception("R2署名付きURL発行エラー")
-            raise
-    # 開発用フォールバック
-    return f"/data/{key}"
-
-
-def d1_query(sql, params=None, timeout=10):
-    """Cloudflare D1 REST API でクエリを1件実行し、rows(list[dict]) を返す."""
-    url = f"{D1_API_BASE}/query"
-    headers = {
-        "Authorization": f"Bearer {CF_API_TOKEN}",
-        "Content-Type": "application/json",
-    }
-    payload = {"sql": sql, "params": params or []}
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("success"):
-        raise RuntimeError(f"D1 query failed: {data.get('errors')}")
-    # result は [{results:[...], meta:{...}}] 形式
-    return data["result"][0].get("results", [])
-
-
-def local_query(sql, params=None):
-    """D1未設定時のローカル開発用: SQLite から取得."""
-    if not os.path.exists(LOCAL_DB_PATH):
-        raise RuntimeError(
-            f"LOCAL_DB_PATH({LOCAL_DB_PATH}) が存在しません。"
-            " python scripts/init_local_db.py を実行するか、D1環境変数を設定してください。"
-        )
-    con = sqlite3.connect(LOCAL_DB_PATH)
-    con.row_factory = sqlite3.Row
+def _get_db_binding():
+    e = _workers_env()
+    if e is None:
+        return None
     try:
-        cur = con.execute(sql, params or [])
-        return [dict(r) for r in cur.fetchall()]
-    finally:
-        con.close()
+        db = getattr(e, "DB", None)
+        return db
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _get_r2_binding():
+    e = _workers_env()
+    if e is None:
+        return None
+    try:
+        return getattr(e, "SLIDES", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _row_to_dict(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return dict(row)
+    try:
+        if hasattr(row, "to_py"):
+            d = row.to_py()
+            if isinstance(d, dict):
+                return {str(k): v for k, v in d.items()}
+    except Exception:  # noqa: BLE001
+        pass
+    if _JsObject is not None:
+        try:
+            keys = list(_JsObject.keys(row))
+            return {str(k): getattr(row, k) for k in keys}
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return dict(row)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out = {}
+        for k in dir(row):
+            if k.startswith("_"):
+                continue
+            try:
+                out[k] = getattr(row, k)
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def db_query(sql, params=None):
-    """D1優先、未設定時はローカルSQLite。"""
-    if D1_ENABLED:
-        # D1 は `?` プレースホルダに対応
-        return d1_query(sql, params)
-    return local_query(sql, params)
+    """D1バインディング経由。pywrangler dev --local でも同じコードで動く。"""
+    db = _get_db_binding()
+    if db is None:
+        raise RuntimeError(
+            "D1 binding `DB` が未設定です。pywrangler dev (D1 local) または "
+            "wrangler.toml の [[d1_databases]] を確認してください。"
+        )
+    params = params or []
+    stmt = db.prepare(sql)
+    if params:
+        stmt = stmt.bind(*params)
+    res = _run_await(stmt.all())
+    try:
+        raw = getattr(res, "results", []) or []
+    except Exception:  # noqa: BLE001
+        raw = []
+    out = []
+    try:
+        n = int(getattr(raw, "length", len(raw)))
+    except Exception:  # noqa: BLE001
+        n = 0
+    # JsProxy配列とPythonリストの両対応
+    try:
+        iterator = list(raw) if not hasattr(raw, "length") else [raw[i] for i in range(n)]
+    except Exception:  # noqa: BLE001
+        iterator = []
+    for r in iterator:
+        d = _row_to_dict(r)
+        if d:
+            out.append(d)
+    return out
+
+
+def db_query_first(sql, params=None):
+    db = _get_db_binding()
+    if db is None:
+        raise RuntimeError("D1 binding `DB` が未設定です")
+    params = params or []
+    stmt = db.prepare(sql)
+    if params:
+        stmt = stmt.bind(*params)
+    row = _run_await(stmt.first())
+    if row is None:
+        return None
+    return _row_to_dict(row)
 
 
 def db_execute(sql, params=None):
-    """INSERT/UPDATE用。D1時はクエリAPI、ローカル時はcommit付きで実行。"""
-    if D1_ENABLED:
-        d1_query(sql, params)
-        return
-    con = sqlite3.connect(LOCAL_DB_PATH)
-    try:
-        con.execute(sql, params or [])
-        con.commit()
-    finally:
-        con.close()
+    """INSERT/UPDATE/DELETE用。"""
+    db = _get_db_binding()
+    if db is None:
+        raise RuntimeError("D1 binding `DB` が未設定です")
+    params = params or []
+    stmt = db.prepare(sql)
+    if params:
+        stmt = stmt.bind(*params)
+    _run_await(stmt.run())
+    return
 
 
-def ensure_local_slide_url_column():
-    """ローカルSQLiteに slide_url / presentation_order カラムがなければ追加 (D1はマイグレーションSQLで対応)。"""
-    if D1_ENABLED:
-        return
-    if not os.path.exists(LOCAL_DB_PATH):
-        return
-    try:
-        con = sqlite3.connect(LOCAL_DB_PATH)
-        try:
-            cols = [r[1] for r in con.execute("PRAGMA table_info(presentations)").fetchall()]
-            if "slide_url" not in cols:
-                con.execute("ALTER TABLE presentations ADD COLUMN slide_url TEXT NOT NULL DEFAULT ''")
-                con.commit()
-                log.info("ローカルDBに slide_url カラムを追加しました")
-                cols.append("slide_url")
-            if "presentation_order" not in cols:
-                con.execute("ALTER TABLE presentations ADD COLUMN presentation_order INTEGER NOT NULL DEFAULT 0")
-                con.commit()
-                log.info("ローカルDBに presentation_order カラムを追加しました")
-                cols.append("presentation_order")
-            if "revision" not in cols:
-                con.execute("ALTER TABLE presentations ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-                con.commit()
-                log.info("ローカルDBに revision カラムを追加しました")
-            # 旧行の発表順を pdf_key からバックフィル
-            backfilled = 0
-            for pid, pdf_key in con.execute(
-                "SELECT id, pdf_key FROM presentations WHERE presentation_order = 0"
-            ).fetchall():
-                order = pdf_order_from_key(pdf_key or "")
-                if order:
-                    con.execute(
-                        "UPDATE presentations SET presentation_order = ? WHERE id = ?",
-                        [int(order), pid],
-                    )
-                    backfilled += 1
-            if backfilled:
-                con.commit()
-                log.info("ローカルDBの発表順を %d 件バックフィルしました", backfilled)
-        finally:
-            con.close()
-    except Exception:  # noqa: BLE001
-        log.exception("ローカルDBカラム自動追加に失敗")
+# ---------- R2 設定 ----------
+# public運用: R2_PUBLIC_BASE_URL 直結。なければ /r2/<key> でバインディング配信。
 
 
-ensure_local_slide_url_column()
+def r2_mode():
+    """public / r2-binding のいずれか。署名発行・local(data/)は廃止。"""
+    if get_r2_public_base():
+        return "public"
+    if _get_r2_binding() is not None:
+        return "r2-binding"
+    return "none"
+
+
+def pdf_url_for(pdf_key):
+    if not pdf_key:
+        return ""
+    key = pdf_key.lstrip("/")
+    base = get_r2_public_base()
+    if base:
+        return f"{base}/{key}"
+    if _get_r2_binding() is not None:
+        return f"/r2/{key}"
+    return f"/r2/{key}"
 
 
 # ---------- Sessions ----------
@@ -865,10 +953,11 @@ def api_upload_pdf(presentation_id):
     """PDFをR2へアップロードし、D1のpdf_keyを更新する。
 
     form-data: file=<pdf>, 任意 key=<オブジェクトキー> (省略時は既存キー or <id>.pdf)
-    R2資格情報 (ENDPOINT/KEY/SECRET/BUCKET) が必要。
+    R2バインディング (SLIDES) を使用。public運用時は公開URLへリダイレクトで配信。
     """
-    if r2_mode() != "presigned":
-        return jsonify({"error": "R2 upload credentials not configured"}), 503
+    r2 = _get_r2_binding()
+    if r2 is None:
+        return jsonify({"error": "R2 binding not configured"}), 503
     if "file" not in request.files:
         return jsonify({"error": "file is required"}), 400
     f = request.files["file"]
@@ -882,9 +971,26 @@ def api_upload_pdf(presentation_id):
         return jsonify({"error": "not found"}), 404
     key = (request.form.get("key") or current.get("pdf_key") or f"{presentation_id}.pdf").lstrip("/")
     try:
-        _s3().upload_fileobj(
-            f.stream, R2_BUCKET_NAME, key, ExtraArgs={"ContentType": "application/pdf"}
-        )
+        data = f.read()
+        put_opts = None
+        if _to_js is not None:
+            try:
+                from js import Object as _Obj  # type: ignore
+
+                put_opts = _to_js(
+                    {"httpMetadata": {"contentType": "application/pdf"}},
+                    dict_converter=_Obj.fromEntries,
+                )
+            except Exception:  # noqa: BLE001
+                put_opts = None
+        if put_opts is not None:
+            _run_await(r2.put(key, data, put_opts))
+        else:
+            try:
+                _run_await(r2.put(key, data))
+            except TypeError:
+                # 一部ランタイムは第3引数dict可
+                _run_await(r2.put(key, data, {"httpMetadata": {"contentType": "application/pdf"}}))
         db_execute("UPDATE presentations SET pdf_key = ? WHERE id = ?", [key, presentation_id])
     except Exception as e:  # noqa: BLE001
         log.exception("R2アップロードエラー")
@@ -912,7 +1018,7 @@ def api_delete_pdf(presentation_id):
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     """管理者ログイン。ADMIN_PASSWORD未設定時はそのままダッシュボードへ。"""
-    if not ADMIN_PASSWORD:
+    if not get_admin_password():
         return redirect(url_for("admin_dashboard"))
     if session.get("admin"):
         return redirect(url_for("admin_dashboard"))
@@ -920,7 +1026,7 @@ def admin_login():
     if request.method == "POST":
         password = request.form.get("password", "")
         next_url = request.form.get("next") or url_for("admin_dashboard")
-        if password == ADMIN_PASSWORD:
+        if password == get_admin_password():
             session["admin"] = True
             return redirect(next_url)
         error = "パスワードが違います"
@@ -949,7 +1055,7 @@ def admin_dashboard():
         "admin.html",
         presentations=presentations,
         sessions=sessions,
-        password_set=bool(ADMIN_PASSWORD),
+        password_set=bool(get_admin_password()),
     )
 
 
@@ -977,7 +1083,7 @@ def admin_presentations():
     return render_template(
         "admin_presentations.html",
         presentations=presentations,
-        password_set=bool(ADMIN_PASSWORD),
+        password_set=bool(get_admin_password()),
     )
 
 
@@ -997,7 +1103,7 @@ def admin_edit_presentation(presentation_id):
         "admin_presentation_edit.html",
         presentation=presentation,
         sessions=sessions,
-        password_set=bool(ADMIN_PASSWORD),
+        password_set=bool(get_admin_password()),
     )
 
 
@@ -1222,15 +1328,100 @@ def admin_delete_session(session_id):
 
 @app.route("/health")
 def health():
+    db = _get_db_binding()
+    d1_ok = False
+    if db is not None:
+        try:
+            _run_await(db.prepare("SELECT 1").run())
+            d1_ok = True
+        except Exception:  # noqa: BLE001
+            d1_ok = False
     return jsonify(
-        {"d1_enabled": D1_ENABLED, "r2_mode": r2_mode(), "r2_bucket": R2_BUCKET_NAME}
+        {
+            "d1_enabled": d1_ok,
+            "r2_mode": r2_mode(),
+            "r2_bucket": "lt-pdf",
+            "r2_public_base_url": get_r2_public_base(),
+            "runtime": "python-workers",
+            "embedded_templates": len(_EMBEDDED_TEMPLATES) if "_EMBEDDED_TEMPLATES" in globals() else -1,
+            "jinja_loader": type(app.jinja_loader).__name__,
+        }
     )
+
+
+@app.route("/r2/<path:key>")
+def r2_file(key):
+    """R2バインディング直配信。public運用時は公開URLへリダイレクト優先。"""
+    clean = (key or "").lstrip("/")
+    if not clean or ".." in clean:
+        abort(404)
+    base = get_r2_public_base()
+    if base:
+        return redirect(f"{base}/{clean}", code=302)
+    r2 = _get_r2_binding()
+    if r2 is None:
+        abort(503, description="R2 binding `SLIDES` 未設定")
+    try:
+        obj = _run_await(r2.get(clean))
+    except Exception as e:  # noqa: BLE001
+        log.exception("R2取得エラー")
+        abort(502, description=str(e))
+    if obj is None:
+        abort(404)
+    try:
+        ctype = "application/pdf"
+        try:
+            md = getattr(obj, "httpMetadata", None)
+            if md is not None:
+                ctype = getattr(md, "contentType", None) or ctype
+        except Exception:  # noqa: BLE001
+            pass
+        body = None
+        for meth in ("bytes", "arrayBuffer"):
+            try:
+                fn = getattr(obj, meth, None)
+                if fn is not None:
+                    body = _run_await(fn())
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        if body is None:
+            try:
+                body = getattr(obj, "body", None)
+            except Exception:  # noqa: BLE001
+                body = None
+        if body is None:
+            abort(404)
+        # JsProxy bytes -> Python bytes 変換
+        try:
+            if not isinstance(body, (bytes, bytearray)):
+                if hasattr(body, "to_py"):
+                    body = body.to_py()
+        except Exception:  # noqa: BLE001
+            pass
+        return Response(bytes(body), content_type=ctype)
+    except Exception as e:  # noqa: BLE001
+        log.exception("R2配信エラー")
+        abort(502, description=str(e))
 
 
 @app.route("/data/<path:filename>")
 def data_file(filename):
-    """開発用フォールバック: data/ フォルダ内の PDF を配信。本番はR2を使用。"""
-    return send_from_directory("data", filename)
+    """旧Flask互換: /data/<key> はR2へフォールバック (Workersにローカルfsなし)。"""
+    base = get_r2_public_base()
+    key = (filename or "").lstrip("/")
+    if base and key:
+        return redirect(f"{base}/{key}", code=302)
+    return r2_file(key)
+
+
+try:
+    if _wsgi is not None:
+        Default = _wsgi.entrypoint(app)
+    else:
+        Default = None
+except Exception:  # noqa: BLE001
+    Default = None
 
 
 if __name__ == "__main__":
