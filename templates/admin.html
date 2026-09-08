@@ -63,12 +63,11 @@
       <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
       <div class="full related-links-field">
         <label for="related-link-input">関連リンク (任意・最大3件)</label>
-        <div id="related-link-chips" class="link-chips" aria-live="polite"></div>
         <input id="related-link-input" type="text" inputmode="url" placeholder="例: https://github.com/... を入力してEnter" maxlength="500" autocomplete="off">
         <input type="hidden" name="related_url1" id="related_url1">
         <input type="hidden" name="related_url2" id="related_url2">
         <input type="hidden" name="related_url3" id="related_url3">
-        <p class="hint">URLを入力してEnterを押すとタグとして追加され、入力欄がクリアされます。×で削除できます。</p>
+        <div id="related-link-chips" class="link-chips" aria-live="polite"></div>
         <p class="hint form-error" id="related-link-error" hidden></p>
       </div>
       <label class="full">コメント<textarea name="comment" rows="2" placeholder="発表の概要・補足"></textarea></label>

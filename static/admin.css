@@ -197,7 +197,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin: 2px 0 6px;
+  margin: 6px 0 2px;
 }
 .link-chips:empty { margin: 0; }
 .link-chip {
