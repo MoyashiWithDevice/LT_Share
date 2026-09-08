@@ -41,9 +41,16 @@
     <label class="full">発表順 *<input name="presentation_order" type="number" min="1" step="1" required value="{{ presentation.presentation_order }}" placeholder="例: 3"></label>
     <label class="full check-label"><input type="checkbox" name="no_pdf" value="1" {% if not presentation.has_pdf %}checked{% endif %}> PDFなし (資料なし・または外部リンクのみで公開)</label>
     <label class="full">資料URL (PDFがない場合の共有リンク・任意)<input name="slide_url" type="url" value="{{ presentation.slide_url }}" placeholder="例: https://docs.google.com/presentation/d/..." maxlength="500"></label>
-    <label class="full">関連リンク1 (任意)<input name="related_url1" type="url" value="{{ presentation.related_url1 }}" placeholder="例: https://github.com/..." maxlength="500"></label>
-    <label class="full">関連リンク2 (任意)<input name="related_url2" type="url" value="{{ presentation.related_url2 }}" placeholder="例: https://..." maxlength="500"></label>
-    <label class="full">関連リンク3 (任意)<input name="related_url3" type="url" value="{{ presentation.related_url3 }}" placeholder="例: https://..." maxlength="500"></label>
+    <div class="full related-links-field">
+      <label for="related-link-input">関連リンク (任意・最大3件)</label>
+      <div id="related-link-chips" class="link-chips" aria-live="polite"></div>
+      <input id="related-link-input" type="text" inputmode="url" placeholder="例: https://github.com/... を入力してEnter" maxlength="500" autocomplete="off">
+      <input type="hidden" name="related_url1" id="related_url1" value="{{ presentation.related_url1 }}">
+      <input type="hidden" name="related_url2" id="related_url2" value="{{ presentation.related_url2 }}">
+      <input type="hidden" name="related_url3" id="related_url3" value="{{ presentation.related_url3 }}">
+      <p class="hint">URLを入力してEnterを押すとタグとして追加され、入力欄がクリアされます。×で削除できます。</p>
+      <p class="hint form-error" id="related-link-error" hidden></p>
+    </div>
     <label class="full">コメント<textarea name="comment" rows="3">{{ presentation.comment }}</textarea></label>
     <label class="full">タグ (カンマ/スペース区切り)<input name="tags" value="{{ presentation.tags|join(', ') }}" placeholder="例: Linux, Docker"></label>
     <p class="full hint">PDFキーは開催回と発表順から自動生成されます。現在の状態: {% if presentation.has_link %}<strong>外部リンク</strong> (外部リンク優先で表示されます){% elif presentation.has_pdf %}<strong>PDFあり</strong> (<code>{{ presentation.pdf_key }}</code>){% else %}<strong>資料なし</strong>{% endif %}</p>
@@ -55,5 +62,111 @@
     </div>
   </form>
 </main>
+<script>
+(function() {
+  var MAX = 3;
+  var chipsEl = document.getElementById('related-link-chips');
+  var inputEl = document.getElementById('related-link-input');
+  var errEl = document.getElementById('related-link-error');
+  var hiddenEls = [
+    document.getElementById('related_url1'),
+    document.getElementById('related_url2'),
+    document.getElementById('related_url3')
+  ];
+  if (!chipsEl || !inputEl) return;
+  function showError(msg) {
+    if (!errEl) return;
+    if (!msg) { errEl.hidden = true; errEl.textContent = ''; }
+    else { errEl.hidden = false; errEl.textContent = msg; }
+  }
+  function getLinks() {
+    var out = [];
+    hiddenEls.forEach(function(h) { if (h && h.value.trim() !== '') out.push(h.value.trim()); });
+    return out;
+  }
+  function setLinks(links) {
+    for (var i = 0; i < hiddenEls.length; i++) {
+      if (hiddenEls[i]) hiddenEls[i].value = links[i] || '';
+    }
+  }
+  function render() {
+    var links = getLinks();
+    chipsEl.innerHTML = '';
+    links.forEach(function(url, idx) {
+      var chip = document.createElement('span');
+      chip.className = 'link-chip';
+      var txt = document.createElement('span');
+      txt.className = 'link-chip-text';
+      txt.textContent = url;
+      txt.title = url;
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'link-chip-remove';
+      btn.setAttribute('aria-label', '削除: ' + url);
+      btn.textContent = '×';
+      btn.addEventListener('click', function() {
+        var cur = getLinks();
+        cur.splice(idx, 1);
+        setLinks(cur);
+        render();
+        showError('');
+        inputEl.focus();
+      });
+      chip.appendChild(txt);
+      chip.appendChild(btn);
+      chipsEl.appendChild(chip);
+    });
+  }
+  function tryAdd(raw) {
+    var url = (raw || '').trim();
+    if (!url) return false;
+    if (!/^https?:\/\/.+/i.test(url)) { showError('関連リンクは http(s):// から始めてください'); return false; }
+    var cur = getLinks();
+    if (cur.indexOf(url) !== -1) { showError('同じURLは既に追加されています'); return false; }
+    if (cur.length >= MAX) { showError('関連リンクは最大' + MAX + '件までです'); return false; }
+    cur.push(url);
+    setLinks(cur);
+    render();
+    showError('');
+    return true;
+  }
+  inputEl.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (tryAdd(inputEl.value)) inputEl.value = '';
+    }
+  });
+  var form = inputEl.closest('form');
+  if (form) {
+    form.addEventListener('submit', function(e) {
+      var pending = inputEl.value.trim();
+      if (!pending) return;
+      var cur = getLinks();
+      if (!/^https?:\/\/.+/i.test(pending)) {
+        e.preventDefault();
+        showError('関連リンクは http(s):// から始めてください');
+        inputEl.focus();
+        return;
+      }
+      if (cur.indexOf(pending) !== -1) {
+        e.preventDefault();
+        showError('同じURLは既に追加されています');
+        inputEl.focus();
+        return;
+      }
+      if (cur.length >= MAX) {
+        e.preventDefault();
+        showError('関連リンクは最大' + MAX + '件までです');
+        inputEl.focus();
+        return;
+      }
+      cur.push(pending);
+      setLinks(cur);
+      inputEl.value = '';
+    });
+  }
+  render();
+})();
+</script>
 </body>
 </html>
