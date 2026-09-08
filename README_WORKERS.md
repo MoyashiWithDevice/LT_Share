@@ -31,6 +31,14 @@ uv run pywrangler deploy
 デプロイ後に表示される `https://lt-share.<subdomain>.workers.dev` にアクセス。
 動作確認: `/health` が `{"d1_enabled":true,"runtime":"python-workers",...}` を返せばOK。
 
+## Cloudflare Builds (自動デプロイ) の設定
+
+> ⚠ Deploy command は必ず `uv run pywrangler deploy` にすること。
+> 既定の `npx wrangler deploy` では Python 依存がバンドルされず
+> `ModuleNotFoundError: No module named 'flask'` で失敗する
+> (素の wrangler は `requirements.txt` を見ても vendoring しない。
+> `pywrangler deploy` が先に `python_modules/` へ vendor してから wrangler に委譲する)。
+
 ## ローカル開発
 
 ```bash
