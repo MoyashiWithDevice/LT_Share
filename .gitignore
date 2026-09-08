@@ -8,3 +8,4 @@ __pycache__/
 node_modules/
 python_modules/
 pylock.toml
+# requirements.txt は置かない (pywrangler が手書き検出で停止するため。依存は pyproject.toml が正本)

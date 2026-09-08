@@ -33,11 +33,13 @@ uv run pywrangler deploy
 
 ## Cloudflare Builds (自動デプロイ) の設定
 
-> ⚠ Deploy command は必ず `uv run pywrangler deploy` にすること。
+> ⚠ Deploy command は必ず `uv sync && uv run pywrangler deploy` にすること。
 > 既定の `npx wrangler deploy` では Python 依存がバンドルされず
 > `ModuleNotFoundError: No module named 'flask'` で失敗する
-> (素の wrangler は `requirements.txt` を見ても vendoring しない。
-> `pywrangler deploy` が先に `python_modules/` へ vendor してから wrangler に委譲する)。
+> (素の wrangler は vendoring しない。`pywrangler deploy` が先に
+> `python_modules/` へ vendor してから wrangler に委譲する)。
+> なお `requirements.txt` を手書きで置くと `pywrangler` が停止するので作らないこと
+> (依存の正本は `pyproject.toml` + `uv.lock`)。
 
 ## ローカル開発
 
