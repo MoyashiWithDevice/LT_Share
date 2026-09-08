@@ -38,6 +38,14 @@
   {% else %}
   <p id="comment">コメントなし</p>
   {% endif %}
+  {% if presentation.related_links %}
+  <h3>Related Links</h3>
+  <ul id="related-links">
+    {% for url in presentation.related_links %}
+    <li><a href="{{ url }}" target="_blank" rel="noopener">{{ url }}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </div>
 <footer>
 {% if prev %}

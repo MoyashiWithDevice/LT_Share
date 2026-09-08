@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS presentations (
   comment TEXT NOT NULL DEFAULT '',
   pdf_key TEXT NOT NULL DEFAULT '', -- Cloudflare R2 のオブジェクトキー。命名規則: Slides/{開催回数字}/{発表順}.pdf (例: Slides/1/1.pdf)。空文字 = PDFなし
   slide_url TEXT NOT NULL DEFAULT '', -- PDFがない場合の外部共有リンク (Google Slides / Canva / Speaker Deck 等)。空文字 = リンクなし
+  related_url1 TEXT NOT NULL DEFAULT '', -- 関連リンク1 (参考URL等)。空文字 = なし
+  related_url2 TEXT NOT NULL DEFAULT '', -- 関連リンク2。空文字 = なし
+  related_url3 TEXT NOT NULL DEFAULT '', -- 関連リンク3。空文字 = なし
   presentation_order INTEGER NOT NULL DEFAULT 0, -- 発表順 (正規URL /{回}/{順} 用。pdf_key とは独立して保持し、PDFなしでも順番が消えないようにする)
   revision INTEGER NOT NULL DEFAULT 0, -- 楽観ロック用カウンタ。更新のたびに+1。古い編集画面からの上書き(発表者名・タグの消失)を検出する
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
